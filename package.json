@@ -1,0 +1,55 @@
+{
+    "name": "efactura-manager",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=24"
+    },
+    "scripts": {
+        "poc": "node --env-file-if-exists=.env src/cli.ts",
+        "test": "node --import tsx --test test/*.test.ts",
+        "build": "tsc && tsc -p web/tsconfig.json && vite build",
+        "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json",
+        "start": "node --env-file-if-exists=.env dist/server/app/api.js",
+        "worker": "node --env-file-if-exists=.env dist/server/app/worker.js",
+        "mock": "node --env-file-if-exists=.env dist/server/app/mock/server.js",
+        "dev": "concurrently -k \"tsx watch --env-file-if-exists=.env app/api.ts\" \"tsx watch --env-file-if-exists=.env app/worker.ts\" \"tsx watch --env-file-if-exists=.env app/mock/server.ts\" \"vite\"",
+        "test:integration": "node scripts/integration.mjs",
+        "test:oauth": "node scripts/oauth-https.mjs",
+        "test:browser": "playwright test",
+        "test:connection": "npm run build && node scripts/connection-integration.mjs",
+        "email:test": "node --env-file=.env scripts/email-smoke.mjs"
+    },
+    "dependencies": {
+        "@nestjs/common": "12.1.0",
+        "@nestjs/core": "12.1.0",
+        "@nestjs/platform-express": "12.1.0",
+        "@nestjs/serve-static": "12.0.0",
+        "fast-xml-parser": "5.11.1",
+        "fflate": "0.8.3",
+        "nodemailer": "10.0.10",
+        "pdfkit": "0.20.2",
+        "pg": "8.23.0",
+        "pg-boss": "12.34.0",
+        "react": "19.3.0",
+        "react-dom": "19.3.0",
+        "reflect-metadata": "0.2.2",
+        "rxjs": "7.8.2"
+    },
+    "devDependencies": {
+        "@playwright/test": "1.63.0",
+        "@types/express": "5.0.6",
+        "@types/node": "26.6.2",
+        "@types/nodemailer": "8.0.2",
+        "@types/pdfkit": "0.17.6",
+        "@types/pg": "8.23.1",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+        "@vitejs/plugin-react": "6.1.1",
+        "concurrently": "10.0.5",
+        "tsx": "4.23.15",
+        "typescript": "7.0.2",
+        "vite": "8.3.1"
+    }
+}

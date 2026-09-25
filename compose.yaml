@@ -1,0 +1,105 @@
+name: efactura-manager
+
+x-app-environment: &app-environment
+    ANAF_MODE: ${ANAF_MODE:-mock}
+    ANAF_ENV: ${ANAF_ENV:-prod}
+    ANAF_CIF: ${ANAF_CIF:-12345678}
+    ANAF_MOCK_URL: http://anaf-mock:8790
+    ANAF_CLIENT_ID: ${ANAF_CLIENT_ID:-}
+    ANAF_CLIENT_SECRET: ${ANAF_CLIENT_SECRET:-}
+    ANAF_REDIRECT_URI: ${ANAF_REDIRECT_URI:-https://localhost:8765/callback}
+    ANAF_TOKEN_ENCRYPTION_KEY: ${ANAF_TOKEN_ENCRYPTION_KEY:-}
+    DATABASE_URL: postgres://efactura:${POSTGRES_PASSWORD:-local-development}@database:5432/efactura
+    DATA_DIR: /app/data
+    APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3100}
+    APP_ADMIN_EMAIL: ${APP_ADMIN_EMAIL:-admin@example.test}
+    APP_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:-local-development-only}
+    APP_SESSION_SECRET: ${APP_SESSION_SECRET:-local-development-session-secret-change-before-hosting}
+    EMAIL_ENABLED: ${EMAIL_ENABLED:-true}
+    EMAIL_FROM: ${EMAIL_FROM:-eFactura Manager <invoices@example.test>}
+    EMAIL_TO: ${EMAIL_TO:-developer@example.test}
+    SMTP_HOST: ${SMTP_HOST:-mailpit}
+    SMTP_PORT: ${SMTP_PORT:-1025}
+    SMTP_SECURE: ${SMTP_SECURE:-false}
+    SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-false}
+    SMTP_USER: ${SMTP_USER:-}
+    SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+
+services:
+    database:
+        image: postgres:17-alpine
+        environment:
+            POSTGRES_USER: efactura
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development}
+            POSTGRES_DB: efactura
+        ports:
+            - "127.0.0.1:55432:5432"
+        volumes:
+            - database:/var/lib/postgresql/data
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U efactura -d efactura"]
+            interval: 5s
+            timeout: 3s
+            retries: 15
+        restart: unless-stopped
+    anaf-mock:
+        build: .
+        image: efactura-manager:development
+        command: ["node", "dist/server/app/mock/server.js"]
+        environment:
+            MOCK_HOST: 0.0.0.0
+            MOCK_STATE_FILE: /app/mock-data/invoices.json
+            ANAF_CIF: ${ANAF_CIF:-12345678}
+        ports:
+            - "127.0.0.1:8790:8790"
+        volumes:
+            - mock-data:/app/mock-data
+        healthcheck:
+            test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+            interval: 5s
+            timeout: 3s
+            retries: 15
+        restart: unless-stopped
+    mailpit:
+        image: axllent/mailpit:v1
+        ports:
+            - "127.0.0.1:8025:8025"
+            - "127.0.0.1:1025:1025"
+        restart: unless-stopped
+    web:
+        build: .
+        image: efactura-manager:development
+        environment: *app-environment
+        ports:
+            - "127.0.0.1:3100:3100"
+        volumes:
+            - invoice-data:/app/data
+        depends_on:
+            database:
+                condition: service_healthy
+            anaf-mock:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+            interval: 5s
+            timeout: 3s
+            retries: 15
+        restart: unless-stopped
+    worker:
+        build: .
+        image: efactura-manager:development
+        command: ["node", "dist/server/app/worker.js"]
+        environment: *app-environment
+        volumes:
+            - invoice-data:/app/data
+        depends_on:
+            database:
+                condition: service_healthy
+            anaf-mock:
+                condition: service_healthy
+        restart: unless-stopped
+
+volumes:
+    database:
+    invoice-data:
+    mock-data:

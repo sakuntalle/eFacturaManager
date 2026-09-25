@@ -1,0 +1,14 @@
+# Use with compose.yaml. Mount locally trusted certificates only in the web process.
+services:
+    web:
+        environment:
+            APP_PUBLIC_URL: https://localhost:8765
+            APP_TLS_CERT_FILE: /app/tls/localhost.pem
+            APP_TLS_KEY_FILE: /app/tls/localhost-key.pem
+        ports:
+            - "127.0.0.1:8765:8765"
+        volumes:
+            - ./.local/tls:/app/tls:ro
+    worker:
+        environment:
+            APP_PUBLIC_URL: https://localhost:8765
