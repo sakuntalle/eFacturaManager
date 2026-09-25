@@ -140,6 +140,17 @@ export function receivedInvoices(messages: Message[]): Message[] {
     return messages.filter(m => m.tip.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase() === 'FACTURA PRIMITA');
 }
 
+export function addedTimestamp(value: string): string | null {
+    const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?$/.exec(value);
+    if (!match) return null;
+    const [, year, month, day, hour, minute, second] = match;
+    if (Number(hour) > 23 || Number(minute) > 59 || (second && Number(second) > 59)) return null;
+    const date = new Date(0);
+    date.setUTCFullYear(Number(year), Number(month) - 1, Number(day));
+    return date.getUTCFullYear() === Number(year) && date.getUTCMonth() + 1 === Number(month)
+        && date.getUTCDate() === Number(day) ? `${year}-${month}-${day}T${hour}:${minute}` : null;
+}
+
 export async function getTokens(
     credentials: { clientId: string; clientSecret: string },
     params: URLSearchParams,

@@ -19,6 +19,8 @@
         "test:oauth": "node scripts/oauth-https.mjs",
         "test:browser": "playwright test",
         "test:connection": "npm run build && node scripts/connection-integration.mjs",
+        "test:entities": "node --import tsx --env-file=.env scripts/entities-integration.mjs",
+        "test:files": "node --import tsx --env-file=.env scripts/file-storage-integration.mjs",
         "email:test": "node --env-file=.env scripts/email-smoke.mjs"
     },
     "dependencies": {

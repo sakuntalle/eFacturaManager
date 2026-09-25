@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { Invoice } from '../../app/contracts.js';
+import { formatAddedDate, formatInvoiceDate } from './invoice-date.js';
 
-export function InvoiceDetails({ invoice, onClose }: { invoice: Invoice; onClose: () => void }) {
+export function InvoiceDetails({ invoice, companyId, onClose }: { invoice: Invoice; companyId: string; onClose: () => void }) {
     const panel = useRef<HTMLElement>(null);
     const heading = useRef<HTMLHeadingElement>(null);
     const body = useRef<HTMLDivElement>(null);
@@ -25,8 +26,9 @@ export function InvoiceDetails({ invoice, onClose }: { invoice: Invoice; onClose
         <div ref={body} className="details-body">
             <div className="detail-grid">
                 <div className="detail-supplier"><span>Supplier</span><b>{invoice.supplier}</b><small>{invoice.supplierCif}</small></div>
-                <div><span>Issue date</span><b>{invoice.issueDate}</b></div>
-                <div><span>Due date</span><b>{invoice.dueDate || 'Not specified'}</b></div>
+                <div><span>Issue date</span><b>{formatInvoiceDate(invoice.issueDate)}</b></div>
+                <div><span>Added date</span><b>{invoice.addedDate ? formatAddedDate(invoice.addedDate) : 'Not available'}</b></div>
+                <div><span>Due date</span><b>{invoice.dueDate ? formatInvoiceDate(invoice.dueDate) : 'Not specified'}</b></div>
                 <div><span>ANAF message</span><b>{invoice.messageId}</b></div>
             </div>
             <div className="table-scroll"><table><thead><tr><th>Description</th><th>Quantity</th><th>Net amount</th></tr></thead>
@@ -35,8 +37,8 @@ export function InvoiceDetails({ invoice, onClose }: { invoice: Invoice; onClose
         </div>
         <div className="details-summary">
             <div className="totals"><span>Net {invoice.net} {invoice.currency}</span><span>VAT {invoice.tax} {invoice.currency}</span><b>Invoice amount {invoice.total} {invoice.currency}</b></div>
-            <div className="details-downloads"><a className="document" href={`/api/invoices/${invoice.id}/zip`}>Download ZIP ↓</a>
-                {invoice.pdfReady ? <a className="document" href={`/api/invoices/${invoice.id}/pdf`}>Download PDF ↓</a> : <span className="muted">Preparing PDF</span>}
+            <div className="details-downloads"><a className="document" href={`/api/invoices/${invoice.id}/zip?companyId=${companyId}`}>Download ZIP ↓</a>
+                {invoice.pdfReady ? <a className="document" href={`/api/invoices/${invoice.id}/pdf?companyId=${companyId}`}>Download PDF ↓</a> : <span className="muted">Preparing PDF</span>}
             </div>
         </div>
     </aside>;

@@ -4,11 +4,12 @@ import { createServer } from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NestFactory } from '@nestjs/core';
-import { Body, Controller, Get, Post, Param, Query, Res, Req, Module, BadRequestException, NotFoundException, HttpException, type ArgumentsHost } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Param, Query, Res, Req, Module, BadRequestException, NotFoundException, HttpException, type ArgumentsHost } from '@nestjs/common';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import type { Request, Response, NextFunction } from 'express';
 import { runtime } from './runtime.js';
 import { mockInvoiceInput } from './mock/invoice-input.js';
+import { entityInput } from './entity-input.js';
 import type { ConnectionFailure } from './connection-errors.js';
 import { Sessions, SESSION_COOKIE } from './sessions.js';
 
@@ -27,6 +28,11 @@ function uuid(id: string) {
 }
 @Controller('api')
 class ApiController {
+    private async selected(id?: string) {
+        if (id !== undefined) uuid(id);
+        try { return await app.scope(id); }
+        catch { throw new NotFoundException('Entity not found.'); }
+    }
     @Get('health') health() { return { ok: true }; }
     @Post('login') async login(@Body() body: { email?: string; password?: string; rememberMe?: boolean }, @Req() req: Request, @Res() res: Response) {
         if (body?.rememberMe !== undefined && typeof body.rememberMe !== 'boolean') throw new BadRequestException('Remember me must be a boolean.');
@@ -64,53 +70,100 @@ class ApiController {
         await app.connection.disconnect();
         return { ok: true };
     }
-    @Get('status') async status() {
-        return { company: await app.repo.company(), emailEnabled: app.cfg.emailEnabled, emailTo: app.cfg.smtp.to, mode: app.cfg.mode, connection: await app.connection.status() };
+    @Get('status') async status(@Query('companyId') companyId?: string) {
+        if (companyId !== undefined) uuid(companyId);
+        const companies = await app.repo.companies();
+        const company = companyId ? companies.find(item => item.id === companyId) : companies[0];
+        if (companyId && !company) throw new NotFoundException('Entity not found.');
+        return { company: company ?? null, companies,
+            emailEnabled: company?.emailEnabled ?? false, emailTo: company?.emailTo ?? app.cfg.smtp.to,
+            mode: app.cfg.mode, connection: await app.connection.status() };
     }
-    @Get('invoices') invoices(@Query('search') search?: string) { return app.repo.invoices(typeof search === 'string' ? search.slice(0, 100) : ''); }
-    @Get('invoices/:id') async invoice(@Param('id') id: string) {
-        const invoice = await app.repo.invoice(uuid(id));
+    @Post('companies') async createCompany(@Body() body: Record<string, unknown>) {
+        let input;
+        try { input = entityInput(body); }
+        catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid entity settings.'); }
+        try { return await app.repo.createCompany(input); }
+        catch (error) {
+            if (typeof error === 'object' && error && 'code' in error && error.code === '23505') {
+                throw new BadRequestException('This fiscal identifier is already configured.');
+            }
+            throw error;
+        }
+    }
+    @Post('companies/:id') async updateCompany(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+        const item = await this.selected(id);
+        let input;
+        try { input = entityInput(body); }
+        catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid entity settings.'); }
+        if (input.cif !== item.company.cif || input.kind !== item.company.kind) {
+            throw new BadRequestException('Entity type and fiscal identifier cannot be changed after setup.');
+        }
+        return item.repo.updateCompany(input);
+    }
+    @Delete('companies/:id') async deleteCompany(@Param('id') id: string) {
+        const result = await app.repo.deleteCompany(uuid(id));
+        if (!result.deleted) throw new NotFoundException('Entity not found.');
+        return result;
+    }
+    @Get('invoices') async invoices(@Query('search') search?: string, @Query('companyId') companyId?: string,
+        @Query('sortBy') sortBy?: string, @Query('direction') direction?: string, @Query('page') page?: string) {
+        if (sortBy !== undefined && sortBy !== 'issue' && sortBy !== 'added') throw new BadRequestException('Invalid invoice sort field.');
+        if (direction !== undefined && direction !== 'asc' && direction !== 'desc') throw new BadRequestException('Invalid invoice sort direction.');
+        if (page !== undefined && (!/^[1-9]\d*$/.test(page) || !Number.isSafeInteger(Number(page)))) {
+            throw new BadRequestException('Invalid invoice page.');
+        }
+        return (await this.selected(companyId)).repo.invoicePage(typeof search === 'string' ? search.slice(0, 100) : '',
+            sortBy ?? 'added', direction ?? 'desc', page === undefined ? 1 : Number(page), 50);
+    }
+    @Get('invoices/:id') async invoice(@Param('id') id: string, @Query('companyId') companyId?: string) {
+        const invoice = await (await this.selected(companyId)).repo.invoice(uuid(id));
         if (!invoice) throw new NotFoundException();
         return invoice;
     }
-    @Get('invoices/:id/:kind') async download(@Param('id') id: string, @Param('kind') kind: string, @Res() res: Response) {
+    @Get('invoices/:id/:kind') async download(@Param('id') id: string, @Param('kind') kind: string,
+        @Query('companyId') companyId: string | undefined, @Res() res: Response) {
         if (kind !== 'zip' && kind !== 'pdf') throw new NotFoundException();
-        const invoice = await app.repo.invoice(uuid(id));
+        const item = await this.selected(companyId);
+        const invoice = await item.repo.invoice(uuid(id));
         if (!invoice || (kind === 'pdf' && !invoice.pdfReady)) throw new NotFoundException('Document is not ready.');
-        const bytes = await app.files.read(invoice.messageId, kind);
+        const bytes = await item.files.read(invoice.messageId, kind);
         res.setHeader('Content-Type', kind === 'zip' ? 'application/zip' : 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.messageId}.${kind}"`);
         res.send(bytes);
     }
-    @Post('sync') async sync() {
+    @Post('sync') async sync(@Query('companyId') companyId?: string) {
         if (!await app.connection.available()) throw new BadRequestException('Connect to ANAF in Settings first.');
-        const company = await app.repo.company();
-        await app.queue.publish('sync', { companyId: company.id });
+        const item = await this.selected(companyId);
+        await app.queue.publish('sync', { companyId: item.company.id });
         return { queued: true };
     }
-    @Post('settings') async settings(@Body() body: { pollSeconds?: number }) {
+    @Post('settings') async settings(@Body() body: { pollSeconds?: number }, @Query('companyId') companyId?: string) {
         if (!Number.isInteger(body?.pollSeconds) || body.pollSeconds! < 15 || body.pollSeconds! > 86400) throw new BadRequestException('Polling interval must be 15–86400 seconds.');
-        await app.repo.updatePoll(body.pollSeconds!);
+        await (await this.selected(companyId)).repo.updatePoll(body.pollSeconds!);
         return { saved: true };
     }
-    @Get('events') events() { return app.repo.events(); }
-    @Post('events/:id/retry') async replay(@Param('id') id: string) {
-        if (!await app.repo.replayEvent(uuid(id))) throw new BadRequestException('Only failed or skipped events can be retried.');
+    @Get('events') async events(@Query('companyId') companyId?: string) { return (await this.selected(companyId)).repo.events(); }
+    @Post('events/:id/retry') async replay(@Param('id') id: string, @Query('companyId') companyId?: string) {
+        if (!await (await this.selected(companyId)).repo.replayEvent(uuid(id))) throw new BadRequestException('Only failed or skipped events can be retried.');
         return { queued: true };
     }
-    @Get('mock') async mockState() { return this.mockRequest(); }
-    @Post('mock') async mockControl(@Body() body: { action?: string; value?: string; supplierName?: unknown; amountRon?: unknown }) {
+    @Get('mock') async mockState(@Query('companyId') companyId?: string) { return this.mockRequest(undefined, companyId); }
+    @Post('mock') async mockControl(@Body() body: { action?: string; value?: string; supplierName?: unknown; amountRon?: unknown },
+        @Query('companyId') companyId?: string) {
         if (!['invoice', 'scenario'].includes(body?.action ?? '')) throw new BadRequestException('Invalid mock action.');
         if (body.action === 'invoice') {
-            try { return this.mockRequest({ action: 'invoice', ...mockInvoiceInput(body) }); }
+            try { return this.mockRequest({ action: 'invoice', ...mockInvoiceInput(body) }, companyId); }
             catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid invoice details.'); }
         }
         if (body.action === 'scenario' && !['normal', 'rate-limit', 'server-error', 'unauthorized', 'invalid-zip', 'pdf-error'].includes(body.value ?? '')) throw new BadRequestException('Invalid scenario.');
-        return this.mockRequest(body);
+        return this.mockRequest(body, companyId);
     }
-    private async mockRequest(body?: { action?: string; value?: string; supplierName?: unknown; amountRon?: unknown }) {
+    private async mockRequest(body?: { action?: string; value?: string; supplierName?: unknown; amountRon?: unknown }, companyId?: string) {
         if (app.cfg.mode !== 'mock') throw new NotFoundException();
+        const item = await this.selected(companyId);
         const url = new URL('/control', app.cfg.mockUrl);
+        url.searchParams.set('cif', item.company.cif);
         const response = await fetch(url, { method: body ? 'POST' : 'GET',
             headers: { Authorization: 'Bearer mock-only-access-token', 'Content-Type': 'application/json' },
             body: body ? JSON.stringify(body) : undefined, redirect: 'error', signal: AbortSignal.timeout(5000) });

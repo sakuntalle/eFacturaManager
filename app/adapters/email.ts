@@ -5,7 +5,7 @@ import type { Invoice, NotificationChannel } from '../contracts.js';
 
 export class SmtpNotificationChannel implements NotificationChannel {
     private transport: Transporter;
-    constructor(private cfg: Config) {
+    constructor(private cfg: Config, private entityName?: string, private companyId?: string) {
         const smtp = cfg.smtp;
         this.transport = nodemailer.createTransport({ host: smtp.host, port: smtp.port,
             secure: smtp.secure, requireTLS: smtp.requireTLS,
@@ -20,10 +20,10 @@ export class SmtpNotificationChannel implements NotificationChannel {
             const info = await this.transport.sendMail({
                 from: this.cfg.smtp.from, to: this.cfg.smtp.to,
                 messageId: `<${eventId}@efactura.local>`,
-                subject: `${prefix}New invoice ${invoice.number} — ${invoice.supplier}`,
-                text: `${prefix}A new invoice is available.\n\nSupplier: ${invoice.supplier}\nInvoice: ${invoice.number}\n`
+                subject: `${prefix}New invoice${this.entityName ? ` for ${this.entityName}` : ''} ${invoice.number} — ${invoice.supplier}`,
+                text: `${prefix}A new invoice is available.${this.entityName ? `\nEntity: ${this.entityName}` : ''}\n\nSupplier: ${invoice.supplier}\nInvoice: ${invoice.number}\n`
                     + `Issued: ${invoice.issueDate}\nInvoice amount: ${invoice.total} ${invoice.currency}\n\n`
-                    + `${this.cfg.publicUrl}/?invoice=${invoice.id}\n`,
+                    + `${this.cfg.publicUrl}/?invoice=${invoice.id}${this.companyId ? `&companyId=${this.companyId}` : ''}\n`,
             });
             if (!info.accepted?.length || info.rejected?.length) throw new Error('Recipient rejected.');
         } catch { throw new Error('SMTP delivery failed. Check provider settings and recipient; delivery will retry.'); }

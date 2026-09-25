@@ -3,16 +3,20 @@ import { test, expect } from '@playwright/test';
 test('live onboarding, connected settings and renewal never present deployment credentials', async ({ page }) => {
     let state = 'disconnected';
     let initialized = false;
+    const company = { id: '00000000-0000-4000-8000-000000000001', name: 'Test company', kind: 'company',
+        cif: '12345678', emailTo: 'developer@example.test', emailEnabled: true, initialized,
+        pollSeconds: 60, lastSync: null, syncError: null, environment: 'prod' };
     await page.route('**/api/**', async route => {
         const path = new URL(route.request().url()).pathname;
         if (path === '/api/status') return route.fulfill({ json: { mode: 'live', emailEnabled: true, emailTo: 'developer@example.test',
-            company: { cif: '12345678', initialized, pollSeconds: 60, lastSync: null, syncError: null, environment: 'prod' },
+            company: { ...company, initialized }, companies: [{ ...company, initialized }],
             connection: { state, canConnect: state !== 'unconfigured', connectedAt: state === 'connected' ? '2026-09-25T10:00:00Z' : null } } });
         if (path === '/api/anaf/disconnect') { state = 'disconnected'; return route.fulfill({ json: { ok: true } }); }
+        if (path === '/api/invoices') return route.fulfill({ json: { items: [], total: 0, allTotal: 0, page: 1, pageSize: 50 } });
         return route.fulfill({ json: [] });
     });
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Connect your company to ANAF' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Connect your workspace to ANAF' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Connect to ANAF' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Sync now/ })).toBeDisabled();
     await expect(page.locator('form[action="/api/anaf/connect"]')).toHaveAttribute('method', 'post');
@@ -26,7 +30,7 @@ test('live onboarding, connected settings and renewal never present deployment c
     await page.getByRole('button', { name: 'Disconnect ANAF' }).click();
     await expect(page.getByText(/Downloaded invoices will remain/)).toBeVisible();
     await page.getByRole('button', { name: 'Confirm disconnect' }).click();
-    await expect(page.getByRole('heading', { name: 'Connect your company to ANAF' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Connect your workspace to ANAF' })).toBeVisible();
     state = 'reconnect_required';
     await page.reload();
     await expect(page.getByText(/ANAF authorization needs renewing/)).toBeVisible();

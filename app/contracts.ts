@@ -8,10 +8,14 @@ export type InvoiceData = {
     lines: { description: string; quantity: string; amount: string }[];
 };
 export type Invoice = InvoiceData & {
-    id: string; messageId: string; createdAt: string; pdfReady: boolean;
+    id: string; messageId: string; createdAt: string; addedDate: string | null; pdfReady: boolean;
 };
+export type InvoiceSort = 'issue' | 'added';
+export type SortDirection = 'asc' | 'desc';
+export type InvoicePage = { items: Invoice[]; total: number; allTotal: number; page: number; pageSize: number };
 export type Company = {
-    id: string; workspaceId: string; cif: string; mode: AnafMode; environment: 'prod' | 'test';
+    id: string; workspaceId: string; cif: string; name: string; kind: 'company' | 'individual';
+    emailTo: string; emailEnabled: boolean; mode: AnafMode; environment: 'prod' | 'test';
     pollSeconds: number; lastSync: string | null; nextSync: string;
     syncError: string | null; initialized: boolean;
 };
@@ -27,8 +31,12 @@ export interface Repository {
     due(): Promise<boolean>;
     finishSync(error?: string): Promise<void>;
     hasInvoice(messageId: string): Promise<boolean>;
-    insertInvoice(messageId: string, data: InvoiceData, notify: boolean): Promise<void>;
-    invoices(search?: string): Promise<Invoice[]>;
+    addedDateBackfillPending(): Promise<boolean>;
+    markAddedDateBackfilled(): Promise<void>;
+    updateInvoiceAddedDate(messageId: string, addedDate: string | null): Promise<void>;
+    insertInvoice(messageId: string, data: InvoiceData, notify: boolean, addedDate: string | null): Promise<void>;
+    invoices(search?: string, sortBy?: InvoiceSort, direction?: SortDirection): Promise<Invoice[]>;
+    invoicePage(search: string, sortBy: InvoiceSort, direction: SortDirection, page: number, pageSize: number): Promise<InvoicePage>;
     invoice(id: string): Promise<Invoice | null>;
     pdfReady(id: string): Promise<void>;
     events(): Promise<Event[]>;
@@ -53,8 +61,8 @@ export interface JobQueue {
     close(): Promise<void>;
 }
 export interface InvoiceFiles {
-    put(messageId: string, kind: 'zip' | 'xml' | 'pdf', data: Uint8Array): Promise<void>;
-    read(messageId: string, kind: 'zip' | 'xml' | 'pdf'): Promise<Buffer>;
+    put(messageId: string, kind: 'zip' | 'pdf', data: Uint8Array): Promise<void>;
+    read(messageId: string, kind: 'zip' | 'pdf'): Promise<Buffer>;
 }
 export interface NotificationChannel {
     send(invoice: Invoice, eventId: string): Promise<void>;

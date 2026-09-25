@@ -1,14 +1,16 @@
 import { runtime } from './runtime.js';
 
 const app = await runtime().catch(() => { console.error('Worker startup failed. Check deployment configuration and database availability.'); process.exit(1); });
-const company = await app.repo.company();
 await app.queue.work('sync', async job => {
-    if (job.companyId !== company.id) throw new Error('Worker company mismatch.');
-    await app.workflows.sync();
+    if (!await app.repo.findCompany(job.companyId)) return;
+    const item = await app.scope(job.companyId);
+    await item.workflows.sync();
 });
 await app.queue.work('event', async job => {
-    if (job.companyId !== company.id || !job.eventId) throw new Error('Worker event scope mismatch.');
-    await app.workflows.event(job.eventId);
+    if (!job.eventId) throw new Error('Worker event ID missing.');
+    if (!await app.repo.findCompany(job.companyId)) return;
+    const item = await app.scope(job.companyId);
+    await item.workflows.event(job.eventId);
 });
 let stopping = false;
 let running = false;
@@ -16,8 +18,14 @@ async function tick() {
     if (running || stopping) return;
     running = true;
     try {
-        if (await app.connection.available() && await app.repo.due()) await app.queue.publish('sync', { companyId: company.id });
-        await app.workflows.dispatch();
+        const available = await app.connection.available();
+        for (const company of await app.repo.companies()) {
+            try {
+                const item = await app.scope(company.id);
+                if (available && await item.repo.due()) await app.queue.publish('sync', { companyId: company.id });
+                await item.workflows.dispatch();
+            } catch { console.error('Company scheduler dispatch failed; will retry on the next tick.'); }
+        }
     } catch { console.error('Scheduler/outbox dispatch failed; will retry on the next tick.'); }
     finally { running = false; }
 }

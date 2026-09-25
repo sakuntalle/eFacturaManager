@@ -20,11 +20,14 @@ Check **Remember me** at sign-in to stay signed in for 30 days on that browser. 
 
 The first sync imports three synthetic invoices and generates their PDFs. Initial imports do **not** send individual invoice emails. In **Mocked ANAF**, choose **Create simulated invoice**, enter a supplier name and invoice amount in RON, and submit the form. Numbers increment automatically. Amounts accept a comma or dot and up to two decimal places; these custom simulated invoices use zero VAT. Then choose **Sync now** (or wait for the next scheduled poll). The invoice appears in the inbox, its PDF becomes available, and its notification arrives in Mailpit. Open **Activity** to inspect processing, retries and errors.
 
-This is the first application development version, intended for local use. Published ports bind to loopback. Default application/database credentials are local development values; replace them before hosting elsewhere. There is one configured administrator and company per active runtime, with company/workspace scoping in persistence. Full customer onboarding and multiple-user management remain future work.
+This is a local-first development version. Published ports bind to loopback. Default application/database credentials are local development values; replace them before hosting elsewhere. One administrator manages multiple companies and individuals in one workspace. Each entity has its own invoice archive, polling schedule, notification address and job history. Viewer accounts are not implemented.
 
 The **Dark mode** switch stays in the top-right corner while scrolling and is also available on the sign-in page. The invoice form inherits the main UI theme without its own switch. The initial theme follows your system preference; your selection is saved in this browser.
 
-The **Mocked ANAF** sidebar tab appears only when `ANAF_MODE=mock`. It groups simulator controls, mock notices and recent email notification statuses. General polling and email delivery settings remain in **Settings**.
+The **Mocked ANAF** sidebar tab appears only when `ANAF_MODE=mock`. It groups simulator controls, mock notices and recent email notification statuses. In **Settings**, the administrator can add a Company (CIF/CUI) or Individual (CNP), edit its name, polling interval and notification address, and enable or disable its emails. The sidebar selector switches the inbox and activity view between entities.
+
+The administrator can also delete the selected company or individual in **Settings**. A confirmation dialog explains that this permanently removes its stored invoices, ZIPs, PDFs and activity. The shared ANAF connection and other entities remain available. If the last entity is deleted, the app presents the add-entity form; deleted entities do not return after restart.
+
 
 ## Configure your own SMTP provider
 
@@ -39,10 +42,10 @@ SMTP_REQUIRE_TLS=true
 SMTP_USER=your-smtp-username
 SMTP_PASSWORD="your-smtp-password"
 EMAIL_FROM="Your Company <invoices@your-domain.example>"
-EMAIL_TO=your-test-recipient@your-domain.example
+EMAIL_TO=your-initial-recipient@your-domain.example
 ```
 
-Use the port, authentication and sender permitted by your provider. For implicit TLS on port 465 set `SMTP_SECURE=true`. TLS certificate verification remains enabled. The current version accepts one configured recipient string; use a single test mailbox while developing.
+Use the port, authentication and sender permitted by your provider. For implicit TLS on port 465 set `SMTP_SECURE=true`. TLS certificate verification remains enabled. `EMAIL_TO` seeds the original entity during migration or first startup; subsequent recipient changes belong in each entity’s Settings page. SMTP credentials remain deployment-wide in `.env`.
 
 For a personal Gmail sending account, turn on 2-Step Verification and create a Google app password. Keep both the mailbox address and app password only in your local `.env`, with these values:
 
@@ -113,7 +116,7 @@ The integration test requires the default mock company/admin and Mailpit recipie
 
 - `app/contracts.ts`: boundaries for persistence, queueing, ANAF, files and notification channels.
 - `app/adapters/postgres.ts`: PostgreSQL schema/bootstrap migration and repository implementation. Invoice insertion and outbox creation share one transaction. Decimal amounts are preserved as strings in the invoice document.
-- `app/adapters/queue.ts`: pg-boss implementation, retries and dead-letter queues. Queues are scoped by company/mode/environment.
+- `app/adapters/queue.ts`: pg-boss implementation, retries and dead-letter queues. Workspace queues carry a company ID on every job.
 - `app/workflows.ts`: synchronization, outbox publication and job execution. No SQL or pg-boss calls in business workflows.
 - `app/adapters/anaf.ts`: HTTP adapter using the same list/download client for mock and live endpoints.
 - `app/adapters/files.ts`: local storage implementation, scoped by mode/environment/company.
@@ -137,11 +140,11 @@ Implemented endpoints: received-message listing, ZIP download and XML-to-PDF con
 
 The Mocked ANAF tab can simulate HTTP 429, HTTP 503, an expired authorization (401), an invalid download response with HTTP 200, or a PDF conversion failure. Switch back to normal to exercise recovery. The invalid-download scenario is observable when a new, uncollected invoice exists. PDF failure affects pending PDF jobs; already generated PDFs remain available.
 
-Mock mode uses a dedicated synthetic token and never forwards real ANAF tokens or client secrets to the simulator. Invoice data, files and queues are separated by mode. The simulator currently seeds one company and preserves invoices across restarts in its Docker volume. Its scenario selection resets to normal after restart.
+Mock mode uses a dedicated synthetic token and never forwards real ANAF tokens or client secrets to the simulator. Invoice data and files are separated by mode and fiscal identifier. The simulator seeds the original mock company; newly added mock entities begin empty and can receive simulated invoices. Its scenario selection resets to normal after restart.
 
 ## Live ANAF remains an integration milestone
 
-`ANAF_MODE=live` uses the in-app ANAF connection. Sign in with the workspace email/password, then choose **Connect to ANAF**. The browser opens ANAF certificate authorization and returns to the registered HTTPS `/callback`. The backend verifies access to the configured CIF before saving the connection and starting the initial import. Existing invoices do not generate individual email notifications during that import.
+`ANAF_MODE=live` uses one in-app ANAF connection for the workspace. Sign in with the administrator email/password, then choose **Connect to ANAF**. The browser opens ANAF certificate authorization and returns to the registered HTTPS `/callback`. The backend verifies access to the original CIF before saving the connection. The same certificate-backed token is used for each configured company or individual; ANAF must grant that certificate access to each fiscal identifier. Each entity’s first import suppresses individual invoice emails.
 
 Connection status and Disconnect are under **Settings**. Signing out ends only the browser session. Disconnect deletes the locally stored authorization and stops future ANAF requests; it retains collected documents and does not revoke the grant at ANAF. A request already in flight may finish. Authorization failures display a reconnect prompt; temporary service errors retain the connection and retry.
 
@@ -149,14 +152,16 @@ Each deployment needs its own registration. Deployment credentials stay in serve
 
 See [live HTTPS setup](docs/live-connection.md). The retained [diagnostic CLI](docs/poc.md) is independent and is not required for the application flow. Its plaintext diagnostic token files are not imported by the app.
 
-The integrated flow is tested against simulated OAuth responses over real local HTTPS and PostgreSQL. The qualified-certificate round trip and real invoice/PDF responses still need validation with ANAF. Listing is currently non-paginated and is not a complete archival/backfill implementation. The inbox shows the latest 200 invoices.
+The integrated flow is tested against simulated OAuth responses over real local HTTPS and PostgreSQL. The qualified-certificate round trip and real invoice/PDF responses still need validation with ANAF. Listing is currently non-paginated and is not a complete archival/backfill implementation. The inbox shows up to 200 invoices in the selected date order.
+
+The inbox defaults to sorting by ANAF Added date and time, newest first; both Added date and Issue date headings can reverse the order. Dates display as `DD/MM/YYYY`, and Added date includes the ANAF time as `HH:mm`. On upgrade, the worker revisits the available 60-day ANAF message list once per entity to fill time on previously collected invoices. If ANAF no longer lists an older message, the stored date remains visible with "time unavailable" rather than inventing a time.
 
 ## Data and operations
 
-Docker volumes persist PostgreSQL data, original invoices/PDFs and simulator fixtures. `docker compose down` stops the stack without deleting those volumes. Back up the database and invoice volume together. Do not use `down -v` unless intentionally discarding this development installation's data.
+PostgreSQL stores parsed invoice details and the original ZIP and generated PDF bytes in a separate document table. The XML remains inside the ZIP and is extracted when needed. Back up the PostgreSQL database to preserve both invoice details and documents. The app no longer mounts or writes an `invoice-data` volume. Installations upgrading from an older version must migrate their legacy files into PostgreSQL before using this Compose configuration. `docker compose down` preserves volumes; `down -v` deletes them.
 
-Administrator sessions are stored in PostgreSQL as token hashes with server-side expiry, behind a replaceable session-store contract. The current worker processes one job at a time per queue; jobs have a five-minute execution timeout. Files are written before committing their database records; a crash can leave an orphan file, which a subsequent sync replaces. Full archival completeness, long-running job heartbeats and packaged backup/upgrade tooling are future work.
+Administrator sessions are stored in PostgreSQL as token hashes with server-side expiry, behind a replaceable session-store contract. The current worker processes one job at a time per queue; jobs have a five-minute execution timeout. The ZIP is stored before committing its invoice/outbox record; a crash can leave an orphan document row, which a subsequent sync reuses. Full archival completeness, long-running job heartbeats and packaged backup/upgrade tooling are future work.
 
 For cloud hosting later, substitute managed storage/queue adapters and add deployment-specific HTTPS, secret management and monitoring. Windows/Linux Docker compatibility follows the Linux-container packaging, but those host systems have not yet been separately exercised.
 
-Invoice amounts in the inbox, details and notifications use the XML total including VAT (`TaxInclusiveAmount`), rather than the remaining balance (`PayableAmount`). Existing stored amounts are corrected from their original local XML once at startup, transactionally per company. This does not modify source documents or resend notifications. Missing or invalid source XML prevents the correction from committing. After `npm run build`, run `node scripts/invoice-totals-integration.mjs` with the local development database to verify migration rollback, concurrency and idempotency using isolated synthetic records.
+Invoice amounts in the inbox, details and notifications use the XML total including VAT (`TaxInclusiveAmount`), rather than the remaining balance (`PayableAmount`). Existing stored amounts are corrected from the XML inside their original ZIP once at startup, transactionally per company. This does not modify source documents or resend notifications. Missing or invalid source XML prevents the correction from committing. After `npm run build`, run `node scripts/invoice-totals-integration.mjs` with the local development database to verify migration rollback, concurrency and idempotency using isolated synthetic records. Run `npm run test:files` to verify database document storage and interrupted-migration recovery.

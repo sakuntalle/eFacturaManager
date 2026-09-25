@@ -14,13 +14,20 @@ import { AnafConnection } from '../dist/server/app/connection.js';
 
 const origin = 'https://localhost:9876';
 const ca = await readFile(join(execFileSync('mkcert', ['-CAROOT'], { encoding: 'utf8' }).trim(), 'rootCA.pem'));
+const sourceUrl = new URL('postgres://efactura:local-development@127.0.0.1:55432/efactura');
+const databaseName = `efactura_connection_${randomBytes(6).toString('hex')}`;
+const testUrl = new URL(sourceUrl);
+testUrl.pathname = `/${databaseName}`;
+const databaseAdmin = new pg.Client({ connectionString: sourceUrl.toString() });
+await databaseAdmin.connect();
+await databaseAdmin.query(`CREATE DATABASE ${databaseName}`);
 const env = { ...process.env, ANAF_MODE: 'live', ANAF_ENV: 'test', ANAF_CIF: '9999999999876',
     APP_PUBLIC_URL: origin, PORT: '3199', APP_TLS_PORT: '9876', APP_TLS_CERT_FILE: '.local/tls/localhost.pem',
     APP_TLS_KEY_FILE: '.local/tls/localhost-key.pem', ANAF_CLIENT_ID: 'integration-private-id',
     ANAF_CLIENT_SECRET: 'integration-private-secret', ANAF_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     ANAF_REDIRECT_URI: `${origin}/callback`, EMAIL_ENABLED: 'false',
     APP_ADMIN_EMAIL: 'admin@example.test', APP_ADMIN_PASSWORD: 'local-development-only',
-    DATABASE_URL: 'postgres://efactura:local-development@127.0.0.1:55432/efactura' };
+    DATABASE_URL: testUrl.toString() };
 const child = spawn(process.execPath, ['--import', './test/helpers/oauth-fetch.mjs', 'dist/server/app/api.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let logs = '';
 child.stdout.on('data', value => { logs += value; });
@@ -90,7 +97,7 @@ try {
         await page.getByLabel('Password', { exact: true }).fill(env.APP_ADMIN_PASSWORD);
         await page.getByRole('button', { name: /Sign in/ }).click();
         const outgoing = page.waitForResponse(response => new URL(response.url()).pathname === '/api/anaf/connect');
-        const firstReturn = page.waitForResponse(async response => response.url() === `${origin}/api/status`
+        const firstReturn = page.waitForResponse(async response => new URL(response.url()).pathname === '/api/status'
             && response.status() === 200 && (await response.json()).connection.state === 'connected');
         firstReturn.catch(() => {});
         outgoing.catch(() => {});
@@ -112,7 +119,7 @@ try {
         assert.equal((await page.locator('body').innerText()).includes('private-test-provider-detail'), false);
         assert.equal(new URL(page.url()).searchParams.has('reason'), false);
         providerError = false;
-        const secondReturn = page.waitForResponse(async response => response.url() === `${origin}/api/status`
+        const secondReturn = page.waitForResponse(async response => new URL(response.url()).pathname === '/api/status'
             && response.status() === 200 && (await response.json()).connection.state === 'connected');
         secondReturn.catch(() => {});
         await page.getByRole('button', { name: 'Connect to ANAF' }).click();
@@ -186,10 +193,7 @@ try {
     provider.closeAllConnections();
     child.kill('SIGTERM');
     await exited;
-    const company = await repo.company().catch(() => null);
-    if (company) {
-        await pool.query('DELETE FROM anaf_connections WHERE company_id=$1', [company.id]);
-        await pool.query('DELETE FROM companies WHERE id=$1', [company.id]);
-    }
     await Promise.all([repo.close(), otherRepo.close(), pool.end()]);
+    await databaseAdmin.query(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`);
+    await databaseAdmin.end();
 }

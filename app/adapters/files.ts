@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Config } from '../config.js';
 import type { InvoiceFiles } from '../contracts.js';
+import type { PostgresRepository } from './postgres.js';
 import { digits } from '../../src/anaf.ts';
 
 export class LocalInvoiceFiles implements InvoiceFiles {
@@ -18,4 +19,14 @@ export class LocalInvoiceFiles implements InvoiceFiles {
         } finally { await rm(temporary, { force: true }); }
     }
     async read(id: string, kind: 'zip' | 'xml' | 'pdf') { return readFile(this.path(id, kind)); }
+}
+
+export class PostgresInvoiceFiles implements InvoiceFiles {
+    constructor(private repo: PostgresRepository) {}
+    async put(id: string, kind: 'zip' | 'pdf', data: Uint8Array) {
+        await this.repo.putFile(id, kind, data);
+    }
+    async read(id: string, kind: 'zip' | 'pdf') {
+        return this.repo.readFile(id, kind);
+    }
 }

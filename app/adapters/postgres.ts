@@ -1,22 +1,29 @@
 import pg from 'pg';
 import { randomUUID, createHash } from 'node:crypto';
 import type { Config } from '../config.js';
-import type { Company, Event, Invoice, InvoiceData, Repository, SessionStore } from '../contracts.js';
+import type { Company, Event, Invoice, InvoiceData, InvoicePage, InvoiceSort, Repository, SessionStore, SortDirection } from '../contracts.js';
 
 import type { ConnectionStore, ConnectionRecord, ConnectionTransaction, OAuthAttempt } from '../connection.js';
+import type { EntityInput } from '../entity-input.js';
 
-const WORKSPACE = '00000000-0000-4000-8000-000000000001';
+export const WORKSPACE_ID = '00000000-0000-4000-8000-000000000001';
+const WORKSPACE = WORKSPACE_ID;
 // PostgreSQL-specific SQL and migrations remain inside this adapter.
 export class PostgresRepository implements Repository, SessionStore, ConnectionStore {
     private pool: pg.Pool;
     private companyId: string;
     private cfg: Config;
-    constructor(cfg: Config) {
+    private ownsPool: boolean;
+    private defaultSelection: boolean;
+    constructor(cfg: Config, companyId?: string, pool?: pg.Pool) {
         this.cfg = cfg;
-        this.pool = new pg.Pool({ connectionString: cfg.databaseUrl, max: 6 });
+        this.pool = pool ?? new pg.Pool({ connectionString: cfg.databaseUrl, max: 6 });
+        this.ownsPool = !pool;
+        this.defaultSelection = companyId === undefined;
         const hex = createHash('sha256').update(`${WORKSPACE}:${cfg.mode}:${cfg.environment}:${cfg.cif}`).digest('hex');
-        this.companyId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+        this.companyId = companyId ?? `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
     }
+    forCompany(id: string) { return new PostgresRepository(this.cfg, id, this.pool); }
     async initialize() {
         const client = await this.pool.connect();
         try {
@@ -39,6 +46,12 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                     pdf_ready boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(),
                     UNIQUE(company_id,message_id)
                 );
+                CREATE TABLE IF NOT EXISTS invoice_files (
+                    company_id uuid NOT NULL REFERENCES companies(id),
+                    message_id text NOT NULL, kind text NOT NULL CHECK (kind IN ('zip','pdf')),
+                    data bytea NOT NULL, sha256 text NOT NULL,
+                    PRIMARY KEY(company_id,message_id,kind)
+                );
                 CREATE TABLE IF NOT EXISTS outbox (
                     id uuid PRIMARY KEY, company_id uuid NOT NULL REFERENCES companies(id),
                     invoice_id uuid NOT NULL REFERENCES invoices(id), kind text NOT NULL,
@@ -58,14 +71,128 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                     company_id uuid PRIMARY KEY REFERENCES companies(id), data jsonb NOT NULL,
                     attempt jsonb
                 );
+                CREATE TABLE IF NOT EXISTS workspace_connections (
+                    workspace_id uuid NOT NULL REFERENCES workspaces(id), mode text NOT NULL,
+                    environment text NOT NULL, data jsonb NOT NULL, attempt jsonb,
+                    PRIMARY KEY(workspace_id,mode,environment)
+                );
+                CREATE TABLE IF NOT EXISTS entity_bootstrap (
+                    workspace_id uuid NOT NULL REFERENCES workspaces(id), mode text NOT NULL,
+                    environment text NOT NULL, PRIMARY KEY(workspace_id,mode,environment)
+                );
                 INSERT INTO app_migrations(version) VALUES (3) ON CONFLICT DO NOTHING;
+                ALTER TABLE companies ADD COLUMN IF NOT EXISTS name text;
+                ALTER TABLE companies ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'company';
+                ALTER TABLE companies ADD COLUMN IF NOT EXISTS email_to text;
+                ALTER TABLE companies ADD COLUMN IF NOT EXISTS email_enabled boolean;
+                ALTER TABLE companies ADD COLUMN IF NOT EXISTS added_date_backfilled boolean NOT NULL DEFAULT false;
+                ALTER TABLE companies ADD COLUMN IF NOT EXISTS added_time_backfilled boolean NOT NULL DEFAULT false;
+                ALTER TABLE invoices ADD COLUMN IF NOT EXISTS added_date text;
             `);
+            await client.query(`UPDATE companies SET name=COALESCE(name, 'Company ' || cif),
+                email_to=COALESCE(email_to, $1), email_enabled=COALESCE(email_enabled, $2)
+                WHERE workspace_id=$3`, [this.cfg.smtp.to, this.cfg.emailEnabled, WORKSPACE]);
+            if ((await client.query('SELECT 1 FROM app_migrations WHERE version=4')).rowCount === 0) {
+                await client.query("UPDATE outbox SET published_at=NULL WHERE status='pending'");
+                await client.query('INSERT INTO app_migrations(version) VALUES (4)');
+            }
             await client.query('INSERT INTO workspaces VALUES ($1,$2) ON CONFLICT DO NOTHING', [WORKSPACE, 'My workspace']);
-            await client.query(`INSERT INTO companies(id,workspace_id,cif,mode,environment)
-                VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, [this.companyId, WORKSPACE, this.cfg.cif, this.cfg.mode, this.cfg.environment]);
+            await client.query(`INSERT INTO workspace_connections(workspace_id,mode,environment,data,attempt)
+                SELECT DISTINCT ON (c.workspace_id,c.mode,c.environment)
+                    c.workspace_id,c.mode,c.environment,a.data,a.attempt
+                FROM anaf_connections a JOIN companies c ON c.id=a.company_id
+                ORDER BY c.workspace_id,c.mode,c.environment,c.id
+                ON CONFLICT(workspace_id,mode,environment) DO NOTHING`);
+            await client.query('DROP TABLE anaf_connections');
+            const bootstrapped = await client.query(`INSERT INTO entity_bootstrap(workspace_id,mode,environment)
+                VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING workspace_id`,
+            [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+            if (bootstrapped.rowCount) {
+                await client.query(`INSERT INTO companies(id,workspace_id,cif,mode,environment,name,kind,email_to,email_enabled)
+                    SELECT $1,$2,$3,$4,$5,$6,'company',$7,$8 WHERE NOT EXISTS (
+                        SELECT 1 FROM companies WHERE workspace_id=$2 AND mode=$4 AND environment=$5)
+                    ON CONFLICT DO NOTHING`,
+                [this.companyId, WORKSPACE, this.cfg.cif, this.cfg.mode, this.cfg.environment,
+                    `Company ${this.cfg.cif}`, this.cfg.smtp.to, this.cfg.emailEnabled]);
+            }
             await client.query('COMMIT');
         } catch (error) { await client.query('ROLLBACK'); throw error; }
         finally { client.release(); }
+    }
+    async migrateLegacyFiles(readLegacy: (company: { mode: Config['mode']; environment: Config['environment']; cif: string },
+        messageId: string, kind: 'zip' | 'pdf') => Promise<Buffer>) {
+        const client = await this.pool.connect();
+        let locked = false;
+        try {
+            await client.query('SELECT pg_advisory_lock(81392003)');
+            locked = true;
+            const completed = (await client.query('SELECT 1 FROM app_migrations WHERE version=5')).rowCount !== 0;
+            const { rows } = await client.query(`SELECT c.id,c.mode,c.environment,c.cif,i.message_id,i.pdf_ready
+                FROM invoices i JOIN companies c ON c.id=i.company_id
+                WHERE c.workspace_id=$1 AND ($2::boolean=false OR NOT EXISTS (
+                    SELECT 1 FROM invoice_files f WHERE f.company_id=c.id AND f.message_id=i.message_id AND f.kind='zip'
+                ) OR (i.pdf_ready AND NOT EXISTS (
+                    SELECT 1 FROM invoice_files f WHERE f.company_id=c.id AND f.message_id=i.message_id AND f.kind='pdf'
+                )))`, [WORKSPACE, completed]);
+            for (const row of rows) {
+                const kinds: ('zip' | 'pdf')[] = row.pdf_ready ? ['zip', 'pdf'] : ['zip'];
+                for (const kind of kinds) {
+                    const existing = await client.query(`SELECT data,sha256 FROM invoice_files
+                        WHERE company_id=$1 AND message_id=$2 AND kind=$3`, [row.id, row.message_id, kind]);
+                    if (existing.rowCount) {
+                        const stored = existing.rows[0];
+                        if (createHash('sha256').update(stored.data).digest('hex') !== stored.sha256) {
+                            throw new Error('A stored invoice document failed integrity verification.');
+                        }
+                        continue;
+                    }
+                    const bytes = await readLegacy(row, row.message_id, kind);
+                    const hash = createHash('sha256').update(bytes).digest('hex');
+                    await client.query(`INSERT INTO invoice_files(company_id,message_id,kind,data,sha256)
+                        VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+                    [row.id, row.message_id, kind, bytes, hash]);
+                    const { rows: [stored] } = await client.query(`SELECT data,sha256 FROM invoice_files
+                        WHERE company_id=$1 AND message_id=$2 AND kind=$3`, [row.id, row.message_id, kind]);
+                    if (stored.sha256 !== hash || createHash('sha256').update(stored.data).digest('hex') !== hash) {
+                        throw new Error('A migrated invoice document failed integrity verification.');
+                    }
+                }
+            }
+            await client.query('INSERT INTO app_migrations(version) VALUES (5) ON CONFLICT DO NOTHING');
+        } finally {
+            if (locked) await client.query('SELECT pg_advisory_unlock(81392003)');
+            client.release();
+        }
+    }
+    async putFile(messageId: string, kind: 'zip' | 'pdf', data: Uint8Array) {
+        const bytes = Buffer.from(data);
+        const hash = createHash('sha256').update(bytes).digest('hex');
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            if (!(await client.query('SELECT id FROM companies WHERE id=$1 FOR UPDATE', [this.companyId])).rowCount) {
+                throw new Error('Entity no longer exists.');
+            }
+            await client.query(`INSERT INTO invoice_files(company_id,message_id,kind,data,sha256)
+                VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, [this.companyId, messageId, kind, bytes, hash]);
+            const { rows: [stored] } = await client.query(`SELECT data,sha256 FROM invoice_files
+                WHERE company_id=$1 AND message_id=$2 AND kind=$3`, [this.companyId, messageId, kind]);
+            if (createHash('sha256').update(stored.data).digest('hex') !== stored.sha256) {
+                throw new Error('Stored invoice document failed integrity verification.');
+            }
+            if (kind === 'zip' && stored.sha256 !== hash) throw new Error('The original invoice ZIP differs from the stored copy.');
+            await client.query('COMMIT');
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
+    }
+    async readFile(messageId: string, kind: 'zip' | 'pdf'): Promise<Buffer> {
+        const { rows: [stored] } = await this.pool.query(`SELECT data,sha256 FROM invoice_files
+            WHERE company_id=$1 AND message_id=$2 AND kind=$3`, [this.companyId, messageId, kind]);
+        if (!stored) throw new Error('Stored invoice document is unavailable.');
+        if (createHash('sha256').update(stored.data).digest('hex') !== stored.sha256) {
+            throw new Error('Stored invoice document failed integrity verification.');
+        }
+        return stored.data;
     }
     async migrateInvoiceTotals(readTotal: (messageId: string) => Promise<string>) {
         const client = await this.pool.connect();
@@ -84,10 +211,70 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         finally { client.release(); }
     }
     async company(): Promise<Company> {
-        const { rows: [r] } = await this.pool.query('SELECT * FROM companies WHERE id=$1 AND workspace_id=$2', [this.companyId, WORKSPACE]);
-        return { id: r.id, workspaceId: r.workspace_id, cif: r.cif, mode: r.mode, environment: r.environment,
+        const { rows: [r] } = this.defaultSelection
+            ? await this.pool.query(`SELECT * FROM companies WHERE workspace_id=$1 AND mode=$2 AND environment=$3
+                ORDER BY (id=$4) DESC,name,id LIMIT 1`, [WORKSPACE, this.cfg.mode, this.cfg.environment, this.companyId])
+            : await this.pool.query('SELECT * FROM companies WHERE id=$1 AND workspace_id=$2 AND mode=$3 AND environment=$4',
+                [this.companyId, WORKSPACE, this.cfg.mode, this.cfg.environment]);
+        if (!r) throw new Error('Company does not exist.');
+        return this.mapCompany(r);
+    }
+    private mapCompany(r: pg.QueryResultRow): Company {
+        return { id: r.id, workspaceId: r.workspace_id, cif: r.cif, name: r.name, kind: r.kind,
+            emailTo: r.email_to, emailEnabled: r.email_enabled, mode: r.mode, environment: r.environment,
             pollSeconds: r.poll_seconds, lastSync: r.last_sync?.toISOString() ?? null, nextSync: r.next_sync.toISOString(),
             syncError: r.sync_error, initialized: r.initialized };
+    }
+    async companies(): Promise<Company[]> {
+        const { rows } = await this.pool.query(`SELECT * FROM companies WHERE workspace_id=$1 AND mode=$2 AND environment=$3
+            ORDER BY name, id`, [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+        return rows.map(r => this.mapCompany(r));
+    }
+    async findCompany(id: string): Promise<Company | null> {
+        const { rows: [r] } = await this.pool.query(`SELECT * FROM companies WHERE id=$1 AND workspace_id=$2
+            AND mode=$3 AND environment=$4`, [id, WORKSPACE, this.cfg.mode, this.cfg.environment]);
+        return r ? this.mapCompany(r) : null;
+    }
+    async createCompany(input: EntityInput): Promise<Company> {
+        const id = randomUUID();
+        const { rows: [r] } = await this.pool.query(`INSERT INTO companies
+            (id,workspace_id,cif,mode,environment,name,kind,email_to,email_enabled,poll_seconds)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+            [id, WORKSPACE, input.cif, this.cfg.mode, this.cfg.environment, input.name, input.kind,
+                input.emailTo, input.emailEnabled, input.pollSeconds]);
+        return this.mapCompany(r);
+    }
+    async updateCompany(input: EntityInput): Promise<Company> {
+        const { rows: [r] } = await this.pool.query(`UPDATE companies SET name=$2,kind=$3,email_to=$4,
+            email_enabled=$5,poll_seconds=$6,next_sync=now() WHERE id=$1 AND workspace_id=$7
+            AND mode=$8 AND environment=$9 AND cif=$10 RETURNING *`,
+            [this.companyId, input.name, input.kind, input.emailTo, input.emailEnabled,
+                input.pollSeconds, WORKSPACE, this.cfg.mode, this.cfg.environment, input.cif]);
+        if (!r) throw new Error('Company does not exist or fiscal identifier cannot be changed.');
+        return this.mapCompany(r);
+    }
+    async deleteCompany(id: string): Promise<{ deleted: boolean; nextCompanyId: string | null }> {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query('SELECT id FROM workspaces WHERE id=$1 FOR UPDATE', [WORKSPACE]);
+            const selected = await client.query(`SELECT id FROM companies WHERE id=$1 AND workspace_id=$2
+                AND mode=$3 AND environment=$4 FOR UPDATE`, [id, WORKSPACE, this.cfg.mode, this.cfg.environment]);
+            if (!selected.rowCount) {
+                await client.query('ROLLBACK');
+                return { deleted: false, nextCompanyId: null };
+            }
+            await client.query('DELETE FROM outbox WHERE company_id=$1', [id]);
+            await client.query('DELETE FROM invoice_files WHERE company_id=$1', [id]);
+            await client.query('DELETE FROM invoices WHERE company_id=$1', [id]);
+            await client.query('DELETE FROM companies WHERE id=$1', [id]);
+            const { rows: [next] } = await client.query(`SELECT id FROM companies WHERE workspace_id=$1
+                AND mode=$2 AND environment=$3 ORDER BY name,id LIMIT 1`,
+            [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+            await client.query('COMMIT');
+            return { deleted: true, nextCompanyId: next?.id ?? null };
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
     }
     async updatePoll(seconds: number) {
         await this.pool.query("UPDATE companies SET poll_seconds=$2::integer,next_sync=now()+($2::integer * interval '1 second') WHERE id=$1", [this.companyId, seconds]);
@@ -105,13 +292,30 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
     async hasInvoice(id: string) {
         return (await this.pool.query('SELECT 1 FROM invoices WHERE company_id=$1 AND message_id=$2', [this.companyId, id])).rowCount !== 0;
     }
-    async insertInvoice(messageId: string, data: InvoiceData, notify: boolean) {
+    async addedDateBackfillPending() {
+        const { rows: [row] } = await this.pool.query(`SELECT NOT (added_date_backfilled AND added_time_backfilled) AS pending
+            FROM companies WHERE id=$1`, [this.companyId]);
+        return row.pending as boolean;
+    }
+    async markAddedDateBackfilled() {
+        await this.pool.query('UPDATE companies SET added_date_backfilled=true,added_time_backfilled=true WHERE id=$1', [this.companyId]);
+    }
+    async updateInvoiceAddedDate(messageId: string, addedDate: string | null) {
+        if (!addedDate) return;
+        await this.pool.query(`UPDATE invoices SET added_date=$3 WHERE company_id=$1 AND message_id=$2
+            AND (added_date IS NULL OR length(added_date)=10)`, [this.companyId, messageId, addedDate]);
+    }
+    async insertInvoice(messageId: string, data: InvoiceData, notify: boolean, addedDate: string | null = null) {
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
+            if (!(await client.query('SELECT id FROM companies WHERE id=$1 FOR UPDATE', [this.companyId])).rowCount) {
+                throw new Error('Entity no longer exists.');
+            }
             const id = randomUUID();
-            const result = await client.query(`INSERT INTO invoices(id,company_id,message_id,data)
-                VALUES ($1,$2,$3,$4) ON CONFLICT(company_id,message_id) DO NOTHING RETURNING id`, [id, this.companyId, messageId, data]);
+            const result = await client.query(`INSERT INTO invoices(id,company_id,message_id,data,added_date)
+                VALUES ($1,$2,$3,$4,$5) ON CONFLICT(company_id,message_id) DO NOTHING RETURNING id`,
+            [id, this.companyId, messageId, data, addedDate]);
             if (result.rowCount) {
                 for (const kind of ['invoice.pdf', ...(notify ? ['invoice.email'] : [])]) {
                     await client.query('INSERT INTO outbox(id,company_id,invoice_id,kind) VALUES ($1,$2,$3,$4)', [randomUUID(), this.companyId, id, kind]);
@@ -122,12 +326,33 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         finally { client.release(); }
     }
     private mapInvoice(r: pg.QueryResultRow): Invoice {
-        return { ...r.data, id: r.id, messageId: r.message_id, createdAt: r.created_at.toISOString(), pdfReady: r.pdf_ready };
+        return { ...r.data, id: r.id, messageId: r.message_id, createdAt: r.created_at.toISOString(),
+            addedDate: r.added_date ?? null, pdfReady: r.pdf_ready };
     }
-    async invoices(search = '') {
+    private invoiceOrder(sortBy: InvoiceSort, direction: SortDirection) {
+        const directionSql = direction === 'asc' ? 'ASC' : 'DESC';
+        return sortBy === 'issue' ? `data->>'issueDate' ${directionSql} NULLS LAST,
+            added_date DESC NULLS LAST, created_at DESC, id DESC`
+            : `added_date ${directionSql} NULLS LAST,
+                data->>'issueDate' DESC NULLS LAST, created_at DESC, id DESC`;
+    }
+    async invoices(search = '', sortBy: InvoiceSort = 'added', direction: SortDirection = 'desc') {
         const result = await this.pool.query(`SELECT * FROM invoices WHERE company_id=$1
-            AND (data->>'supplier' ILIKE $2 OR data->>'number' ILIKE $2) ORDER BY created_at DESC LIMIT 200`, [this.companyId, `%${search}%`]);
+            AND (data->>'supplier' ILIKE $2 OR data->>'number' ILIKE $2)
+            ORDER BY ${this.invoiceOrder(sortBy, direction)}`,
+        [this.companyId, `%${search}%`]);
         return result.rows.map(r => this.mapInvoice(r));
+    }
+    async invoicePage(search: string, sortBy: InvoiceSort, direction: SortDirection, page: number, pageSize: number): Promise<InvoicePage> {
+        const pattern = `%${search}%`;
+        const { rows: [counts] } = await this.pool.query(`SELECT count(*)::integer AS all_total,
+            count(*) FILTER (WHERE data->>'supplier' ILIKE $2 OR data->>'number' ILIKE $2)::integer AS total
+            FROM invoices WHERE company_id=$1`, [this.companyId, pattern]);
+        const { rows } = await this.pool.query(`SELECT * FROM invoices WHERE company_id=$1
+            AND (data->>'supplier' ILIKE $2 OR data->>'number' ILIKE $2)
+            ORDER BY ${this.invoiceOrder(sortBy, direction)} LIMIT $3 OFFSET $4`,
+        [this.companyId, pattern, pageSize, (page - 1) * pageSize]);
+        return { items: rows.map(r => this.mapInvoice(r)), total: counts.total, allTotal: counts.all_total, page, pageSize };
     }
     async invoice(id: string) {
         const { rows: [r] } = await this.pool.query('SELECT * FROM invoices WHERE id=$1 AND company_id=$2', [id, this.companyId]);
@@ -175,7 +400,8 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         await this.pool.query('DELETE FROM auth_sessions WHERE token_hash=$1 AND workspace_id=$2', [tokenHash, WORKSPACE]);
     }
     async connection(): Promise<ConnectionRecord | null> {
-        const { rows: [row] } = await this.pool.query('SELECT data FROM anaf_connections WHERE company_id=$1', [this.companyId]);
+        const { rows: [row] } = await this.pool.query(`SELECT data FROM workspace_connections
+            WHERE workspace_id=$1 AND mode=$2 AND environment=$3`, [WORKSPACE, this.cfg.mode, this.cfg.environment]);
         return row?.data ?? null;
     }
     async withConnectionLock<T>(work: (transaction: ConnectionTransaction) => Promise<T>): Promise<T> {
@@ -183,23 +409,29 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         try {
             await client.query('BEGIN');
             await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`${this.companyId}:oauth`]);
-            const read = async () => (await client.query('SELECT data,attempt FROM anaf_connections WHERE company_id=$1', [this.companyId])).rows[0];
+            const read = async () => (await client.query(`SELECT data,attempt FROM workspace_connections
+                WHERE workspace_id=$1 AND mode=$2 AND environment=$3`, [WORKSPACE, this.cfg.mode, this.cfg.environment])).rows[0];
             const result = await work({
                 hasSession: async tokenHash => (await client.query('SELECT 1 FROM auth_sessions WHERE token_hash=$1 AND workspace_id=$2 AND expires_at>now()', [tokenHash, WORKSPACE])).rowCount === 1,
                 read: async () => (await read())?.data ?? null,
                 write: async data => {
-                    await client.query(`INSERT INTO anaf_connections(company_id,data) VALUES ($1,$2)
-                        ON CONFLICT(company_id) DO UPDATE SET data=EXCLUDED.data`, [this.companyId, data]);
+                    await client.query(`INSERT INTO workspace_connections(workspace_id,mode,environment,data)
+                        VALUES ($1,$2,$3,$4) ON CONFLICT(workspace_id,mode,environment)
+                        DO UPDATE SET data=EXCLUDED.data`, [WORKSPACE, this.cfg.mode, this.cfg.environment, data]);
                 },
                 attempt: async () => (await read())?.attempt as OAuthAttempt ?? null,
                 saveAttempt: async attempt => {
-                    await client.query(`INSERT INTO anaf_connections(company_id,data,attempt) VALUES ($1,$2,$3)
-                        ON CONFLICT(company_id) DO UPDATE SET attempt=EXCLUDED.attempt`, [this.companyId,
+                    await client.query(`INSERT INTO workspace_connections(workspace_id,mode,environment,data,attempt)
+                        VALUES ($1,$2,$3,$4,$5) ON CONFLICT(workspace_id,mode,environment)
+                        DO UPDATE SET attempt=EXCLUDED.attempt`, [WORKSPACE, this.cfg.mode, this.cfg.environment,
                         { state: 'disconnected', encrypted: null, fingerprint: '', connectedAt: null }, attempt]);
                 },
                 resume: async () => {
-                    await client.query('UPDATE companies SET next_sync=now(),sync_error=NULL WHERE id=$1', [this.companyId]);
-                    await client.query("UPDATE outbox SET published_at=NULL WHERE company_id=$1 AND kind='invoice.pdf' AND status='pending'", [this.companyId]);
+                    await client.query(`UPDATE companies SET next_sync=now(),sync_error=NULL
+                        WHERE workspace_id=$1 AND mode=$2 AND environment=$3`, [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+                    await client.query(`UPDATE outbox SET published_at=NULL WHERE kind='invoice.pdf' AND status='pending'
+                        AND company_id IN (SELECT id FROM companies WHERE workspace_id=$1 AND mode=$2 AND environment=$3)`,
+                    [WORKSPACE, this.cfg.mode, this.cfg.environment]);
                 },
             });
             await client.query('COMMIT');
@@ -207,5 +439,5 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         } catch (error) { await client.query('ROLLBACK'); throw error; }
         finally { client.release(); }
     }
-    async close() { await this.pool.end(); }
+    async close() { if (this.ownsPool) await this.pool.end(); }
 }

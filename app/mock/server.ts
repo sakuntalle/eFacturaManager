@@ -6,15 +6,15 @@ import { samplePdf, sampleXml } from './fixtures.js';
 import { mockInvoiceInput } from './invoice-input.js';
 import type { MockInvoiceInput } from './invoice-input.js';
 
-type Entry = { id: string; sequence: number; created: number } & Partial<MockInvoiceInput>;
+type Entry = { id: string; sequence: number; created: number; cif: string } & Partial<MockInvoiceInput>;
 const stateFile = resolve(process.env.MOCK_STATE_FILE ?? '.local/mock/invoices.json');
 const cif = (process.env.ANAF_CIF || '12345678').replace(/^RO/i, '');
 if (!/^\d{1,30}$/.test(cif)) throw new Error('Invalid mock company CIF.');
 let entries: Entry[];
-try { entries = JSON.parse(await readFile(stateFile, 'utf8')); }
+try { entries = (JSON.parse(await readFile(stateFile, 'utf8')) as Entry[]).map(entry => ({ ...entry, cif: entry.cif ?? cif })); }
 catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-    entries = [1, 2, 3].map(sequence => ({ id: String(900000 + sequence), sequence, created: Date.now() - sequence * 60000 }));
+    entries = [1, 2, 3].map(sequence => ({ id: String(900000 + sequence), sequence, created: Date.now() - sequence * 60000, cif }));
 }
 async function persist(nextEntries = entries) {
     await mkdir(dirname(stateFile), { recursive: true });
@@ -35,6 +35,8 @@ const server = createServer(async (req, res) => {
         if (url.pathname === '/health') { json({ ok: true }); return; }
         if (req.headers.authorization !== 'Bearer mock-only-access-token') { json({ eroare: 'Mock token required' }, 401); return; }
         if (url.pathname === '/control') {
+            const selectedCif = url.searchParams.get('cif') ?? cif;
+            if (!/^\d{1,30}$/.test(selectedCif)) { json({ error: 'Invalid fiscal identifier' }, 400); return; }
             let created: { id: string; number: string } | undefined;
             if (req.method === 'POST') {
                 if (mutating) { json({ error: 'Try again' }, 409); return; }
@@ -55,7 +57,7 @@ const server = createServer(async (req, res) => {
                         try { input = mockInvoiceInput(body); }
                         catch (error) { json({ error: error instanceof Error ? error.message : 'Invalid invoice' }, 400); return; }
                         const sequence = entries.reduce((max, entry) => Math.max(max, entry.sequence), 0) + 1;
-                        const entry = { id: String(900000 + sequence), sequence, created: Date.now(), ...input };
+                        const entry = { id: String(900000 + sequence), sequence, created: Date.now(), cif: selectedCif, ...input };
                         const nextEntries = [...entries, entry];
                         await persist(nextEntries);
                         entries = nextEntries;
@@ -65,18 +67,21 @@ const server = createServer(async (req, res) => {
                     } else { json({ error: 'Unsupported control' }, 400); return; }
                 } finally { mutating = false; }
             }
-            json({ scenario, count: entries.length, scenarios, ...(created ? { created } : {}) }); return;
+            json({ scenario, count: entries.filter(entry => entry.cif === selectedCif).length,
+                scenarios, ...(created ? { created } : {}) }); return;
         }
         if (scenario === 'rate-limit') { res.setHeader('Retry-After', '5'); json({ eroare: 'Simulated limit' }, 429); return; }
         if (scenario === 'server-error') { json({ eroare: 'Simulated outage' }, 503); return; }
         if (scenario === 'unauthorized') { json({ eroare: 'Simulated expired token' }, 401); return; }
         if (/^\/(prod|test)\/FCTEL\/rest\/listaMesajeFactura$/.test(url.pathname) && req.method === 'GET') {
             const days = Number(url.searchParams.get('zile'));
-            if (!Number.isInteger(days) || days < 1 || days > 60 || url.searchParams.get('cif') !== cif || url.searchParams.get('filtru') !== 'P') {
+            const selectedCif = url.searchParams.get('cif');
+            if (!Number.isInteger(days) || days < 1 || days > 60 || !selectedCif || !/^\d{1,30}$/.test(selectedCif)
+                || url.searchParams.get('filtru') !== 'P') {
                 json({ eroare: 'Invalid company, days or filter' }, 400); return;
             }
-            const mesaje = entries.filter(e => e.created >= Date.now() - days * 86400000).map(e => ({
-                id: e.id, tip: 'FACTURA PRIMITA', cif, id_solicitare: `8${e.id}`,
+            const mesaje = entries.filter(e => e.cif === selectedCif && e.created >= Date.now() - days * 86400000).map(e => ({
+                id: e.id, tip: 'FACTURA PRIMITA', cif: selectedCif, id_solicitare: `8${e.id}`,
                 data_creare: new Date(e.created).toISOString().replace(/\D/g, '').slice(0, 12),
                 detalii: `Simulated received invoice DEMO-${String(e.sequence).padStart(4, '0')}`,
             }));
@@ -87,7 +92,7 @@ const server = createServer(async (req, res) => {
             if (!entry) { json({ eroare: 'Unknown message' }, 404); return; }
             if (scenario === 'invalid-zip') { json({ eroare: 'Simulated error with HTTP 200' }); return; }
             const custom = entry.supplierName !== undefined ? mockInvoiceInput(entry) : undefined;
-            const xml = sampleXml(entry.sequence, cif, new Date(entry.created).toISOString().slice(0, 10), custom);
+            const xml = sampleXml(entry.sequence, entry.cif, new Date(entry.created).toISOString().slice(0, 10), custom);
             const archive = zipSync({ 'invoice.xml': strToU8(xml), 'signature.xml': strToU8('<MockSignature>NOT A VALID SIGNATURE</MockSignature>') });
             res.writeHead(200, { 'Content-Type': 'application/zip' }).end(Buffer.from(archive)); return;
         }

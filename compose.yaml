@@ -72,8 +72,6 @@ services:
         environment: *app-environment
         ports:
             - "127.0.0.1:3100:3100"
-        volumes:
-            - invoice-data:/app/data
         depends_on:
             database:
                 condition: service_healthy
@@ -90,8 +88,6 @@ services:
         image: efactura-manager:development
         command: ["node", "dist/server/app/worker.js"]
         environment: *app-environment
-        volumes:
-            - invoice-data:/app/data
         depends_on:
             database:
                 condition: service_healthy
@@ -101,5 +97,4 @@ services:
 
 volumes:
     database:
-    invoice-data:
     mock-data:

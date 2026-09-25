@@ -7,12 +7,16 @@ async function workspace(page: Page, mode: 'mock' | 'live') {
     await page.route('**/api/**', async route => {
         const path = new URL(route.request().url()).pathname;
         if (path === '/api/status') {
-            await route.fulfill({ json: { mode, emailEnabled: true, emailTo: 'developer@example.test', company: {
-                cif: '12345678', initialized: true, pollSeconds: 60, lastSync: null, syncError: null, environment: 'prod',
-            } } });
+            const company = { id: '00000000-0000-4000-8000-000000000001', name: 'Test company', kind: 'company',
+                cif: '12345678', emailTo: 'developer@example.test', emailEnabled: true,
+                initialized: true, pollSeconds: 60, lastSync: null, syncError: null, environment: 'prod' };
+            await route.fulfill({ json: { mode, emailEnabled: true, emailTo: 'developer@example.test', company,
+                companies: [company], connection: { state: mode === 'mock' ? 'mock' : 'connected', canConnect: false, connectedAt: null } } });
         } else if (path === '/api/mock') {
             if (route.request().method() === 'POST') scenario = route.request().postDataJSON().value;
             await route.fulfill({ json: { scenario } });
+        } else if (path === '/api/invoices') {
+            await route.fulfill({ json: { items: [], total: 0, allTotal: 0, page: 1, pageSize: 50 } });
         } else if (path === '/api/events') {
             await route.fulfill({ json: [{ id: 'email-1', invoiceId: 'invoice-1', kind: 'invoice.email', status: 'sent', attempts: 0, createdAt: '2026-09-25T12:00:00Z' }] });
         } else {

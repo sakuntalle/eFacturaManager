@@ -32,7 +32,7 @@ assert.equal(status.emailTo, 'developer@example.test', 'Integration test require
 await api('mock', { action: 'scenario', value: 'normal' });
 await api('sync', {});
 await until('initial sync', async () => (await api('status')).company.initialized);
-const before = await api('invoices');
+const before = (await api('invoices')).items;
 assert.ok(before.length >= 3);
 const mockBefore = await api('mock');
 const invalid = await fetch(`${origin}/api/mock`, { method: 'POST',
@@ -42,7 +42,7 @@ assert.equal(invalid.status, 400);
 assert.equal((await api('mock')).count, mockBefore.count, 'Invalid form does not create an invoice');
 const created = await api('mock', { action: 'invoice', supplierName: 'Integration & Supplies <SRL>', amountRon: '987,65' });
 await api('sync', {});
-const invoice = await until('new invoice', async () => (await api('invoices')).find(i => !before.some(old => old.id === i.id)));
+const invoice = await until('new invoice', async () => (await api('invoices')).items.find(i => !before.some(old => old.id === i.id)));
 assert.equal(invoice.number, created.created.number);
 assert.equal(invoice.supplier, 'Integration & Supplies <SRL>');
 assert.equal(invoice.total, '987.65');
@@ -66,7 +66,7 @@ const message = await (await fetch(`http://localhost:8025/api/v1/message/${mail.
 assert.ok(message.Text.includes('987.65 RON'), 'Email contains the entered amount');
 await api('sync', {});
 await delay(2500);
-assert.equal((await api('invoices')).length, before.length + 1, 'Repeated sync does not duplicate invoices');
+assert.equal((await api('invoices')).total, before.length + 1, 'Repeated sync does not duplicate invoices');
 const inbox = await (await fetch('http://localhost:8025/api/v1/messages')).json();
 assert.equal(inbox.messages.filter(m => m.Subject.includes(invoice.number)).length, 1, 'Repeated sync does not duplicate email');
 await api('settings', { pollSeconds: 45 });
@@ -76,14 +76,14 @@ try {
     await api('mock', { action: 'scenario', value: 'server-error' });
     await api('sync', {});
     await until('visible ANAF outage', async () => (await api('status')).company.syncError?.includes('503'));
-    assert.equal((await api('invoices')).length, before.length + 1, 'Stored invoices remain available during outage');
+    assert.equal((await api('invoices')).total, before.length + 1, 'Stored invoices remain available during outage');
     await api('mock', { action: 'scenario', value: 'normal' });
     await until('automatic sync retry recovery', async () => !(await api('status')).company.syncError);
     await api('mock', { action: 'scenario', value: 'pdf-error' });
     const next = await api('mock', { action: 'invoice', supplierName: 'PDF recovery supplier', amountRon: '10.01' });
     assert.equal(Number(next.created.number.slice(5)), Number(created.created.number.slice(5)) + 1, 'Invoice numbers increment automatically');
     await api('sync', {});
-    const independent = await until('invoice during PDF outage', async () => (await api('invoices')).find(i => i.id !== invoice.id && !before.some(old => old.id === i.id)));
+    const independent = await until('invoice during PDF outage', async () => (await api('invoices')).items.find(i => i.id !== invoice.id && !before.some(old => old.id === i.id)));
     await until('email independent of PDF failure', async () => {
         const events = (await api('events')).filter(e => e.invoiceId === independent.id);
         return events.some(e => e.kind === 'invoice.email' && e.status === 'sent')

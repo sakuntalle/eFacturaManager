@@ -12,17 +12,17 @@ test('administrator can browse invoices, inspect details, change polling and use
     await expect(page.locator('.invoice-link').first()).toBeVisible();
     await page.locator('.invoice-link').first().click();
     await expect(page.locator('.details')).toBeVisible();
-    await expect(page.locator('.details .totals')).toContainText(/Total amount \d+\.\d{2} RON/);
+    await expect(page.locator('.details .totals')).toContainText(/Invoice amount \d+\.\d{2} RON/);
     await page.getByRole('button', { name: /Close/ }).click();
     await page.screenshot({ path: info.outputPath('desktop.png'), fullPage: true });
     await page.getByRole('button', { name: /Settings/ }).click();
     const interval = page.getByLabel('Polling interval (seconds)');
     const previous = await interval.inputValue();
     await interval.fill('45');
-    await page.getByRole('button', { name: 'Save interval' }).click();
-    await expect(page.getByRole('status')).toContainText('Polling interval saved');
+    await page.getByRole('button', { name: 'Save entity settings' }).click();
+    await expect(page.getByRole('status')).toContainText('Entity settings saved');
     await interval.fill(previous);
-    await page.getByRole('button', { name: 'Save interval' }).click();
+    await page.getByRole('button', { name: 'Save entity settings' }).click();
     await page.getByRole('button', { name: /Invoice inbox/ }).click();
     await page.getByLabel('Search invoices').fill('no-such-supplier');
     await expect(page.getByRole('heading', { name: 'No matching invoices' })).toBeVisible();
@@ -44,7 +44,7 @@ test('simulated invoice form supports cancellation, validation and custom invoic
     const dialog = page.getByRole('dialog', { name: 'Create simulated invoice' });
     let invoiceRequests = 0;
     page.on('request', request => {
-        if (request.url().endsWith('/api/mock') && request.method() === 'POST' && request.postDataJSON()?.action === 'invoice') invoiceRequests++;
+        if (new URL(request.url()).pathname === '/api/mock' && request.method() === 'POST' && request.postDataJSON()?.action === 'invoice') invoiceRequests++;
     });
     await create.click();
     await expect(dialog).toBeVisible();
@@ -79,6 +79,6 @@ test('simulated invoice form supports cancellation, validation and custom invoic
     await expect(row).toContainText('1234.56 RON');
     await row.getByRole('button').click();
     await expect(page.locator('.details')).toContainText(supplier);
-    await expect(page.locator('.details .totals')).toContainText('Payable 1234.56 RON');
+    await expect(page.locator('.details .totals')).toContainText('Invoice amount 1234.56 RON');
     await expect(row.getByRole('link', { name: 'PDF ↓' })).toBeVisible({ timeout: 30000 });
 });
