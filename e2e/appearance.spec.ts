@@ -6,6 +6,7 @@ async function workspace(page: Page, mode: 'mock' | 'live') {
     let scenario = 'normal';
     await page.route('**/api/**', async route => {
         const path = new URL(route.request().url()).pathname;
+        if (path === '/api/session') return route.fulfill({ json: { username: 'admin', mustChangePassword: false } });
         if (path === '/api/status') {
             const company = { id: '00000000-0000-4000-8000-000000000001', name: 'Test company', kind: 'company',
                 cif: '12345678', emailTo: 'developer@example.test', emailEnabled: true,
@@ -85,8 +86,8 @@ test('mock controls, notices and notification details are grouped in a mock-only
     await expect(page.getByRole('heading', { name: 'Mock invoice notifications' })).toBeVisible();
     await expect(page.locator('.notification-list')).toContainText('Sent');
     await page.getByLabel('Simulate a service condition').selectOption('server-error');
-    await expect(page.getByRole('status')).toHaveText('Simulator scenario updated.');
-    await page.getByRole('button', { name: /Invoice inbox/ }).click();
+    await expect(page.getByRole('status')).toContainText('Simulator scenario updated.');
+    await page.getByRole('button', { name: 'Invoices' }).click();
     await expect(page.getByText('Simulator scenario updated.')).not.toBeVisible();
     await page.unrouteAll();
     await workspace(page, 'live');

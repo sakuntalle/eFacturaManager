@@ -16,6 +16,11 @@ export type Tokens = {
 export class AnafHttpError extends Error {
     constructor(public readonly status: number, message: string) { super(message); }
 }
+export class AnafNetworkError extends Error {
+    constructor(public readonly networkCode: string | null) {
+        super('ANAF request failed or timed out. Check connectivity and retry.');
+    }
+}
 
 const TOKEN_URL = 'https://logincert.anaf.ro/anaf-oauth2/v1/token';
 const MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
@@ -45,8 +50,13 @@ export async function request(url: string | URL, init: RequestInit, fetcher: Fet
         response = await fetcher(url, {
             ...init, redirect: 'error', signal: AbortSignal.timeout(45_000),
         });
-    } catch {
-        throw new Error('ANAF request failed or timed out. Check connectivity and retry.');
+    } catch (error) {
+        const cause = typeof error === 'object' && error !== null ? error as { code?: unknown; cause?: { code?: unknown }; name?: unknown } : {};
+        const code = cause.code ?? cause.cause?.code;
+        const allowed = ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH',
+            'UND_ERR_CONNECT_TIMEOUT'];
+        throw new AnafNetworkError(typeof code === 'string' && allowed.includes(code) ? code
+            : cause.name === 'TimeoutError' ? 'TIMEOUT' : null);
     }
     if (!response.ok) {
         await response.body?.cancel();

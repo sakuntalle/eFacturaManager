@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import type { Config } from '../config.js';
 import type { Invoice, NotificationChannel } from '../contracts.js';
+import { logFailure } from '../diagnostics.js';
 
 export class SmtpNotificationChannel implements NotificationChannel {
     private transport: Transporter;
@@ -26,6 +27,9 @@ export class SmtpNotificationChannel implements NotificationChannel {
                     + `${this.cfg.publicUrl}/?invoice=${invoice.id}${this.companyId ? `&companyId=${this.companyId}` : ''}\n`,
             });
             if (!info.accepted?.length || info.rejected?.length) throw new Error('Recipient rejected.');
-        } catch { throw new Error('SMTP delivery failed. Check provider settings and recipient; delivery will retry.'); }
+        } catch (error) {
+            logFailure('email', 'send', error, { entityId: this.companyId, eventId });
+            throw new Error('SMTP delivery failed. Check provider settings and recipient; delivery will retry.');
+        }
     }
 }

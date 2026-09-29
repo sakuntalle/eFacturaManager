@@ -15,6 +15,7 @@ export type SortDirection = 'asc' | 'desc';
 export type InvoicePage = { items: Invoice[]; total: number; allTotal: number; page: number; pageSize: number };
 export type Company = {
     id: string; workspaceId: string; cif: string; name: string; kind: 'company' | 'individual';
+    connectionId: string;
     emailTo: string; emailEnabled: boolean; mode: AnafMode; environment: 'prod' | 'test';
     pollSeconds: number; lastSync: string | null; nextSync: string;
     syncError: string | null; initialized: boolean;
@@ -75,7 +76,11 @@ export interface AnafGateway {
 }
 
 export type ConnectionStatus = {
-    state: 'mock' | 'unconfigured' | 'disconnected' | 'connected' | 'reconnect_required';
+    state: 'mock' | 'needs_entity' | 'unconfigured' | 'disconnected' | 'connected' | 'reconnect_required';
     canConnect: boolean;
     connectedAt: string | null;
+};
+export type ManagedConnection = {
+    id: string; name: string; verificationCif: string | null; entityIds: string[];
+    status: ConnectionStatus;
 };

@@ -1,11 +1,12 @@
 import { PgBoss } from 'pg-boss';
 import type { Job, JobQueue } from '../contracts.js';
+import { logFailure } from '../diagnostics.js';
 
 export class PostgresJobQueue implements JobQueue {
     private boss: PgBoss;
     constructor(url: string, private scope: string) {
         this.boss = new PgBoss(url);
-        this.boss.on('error', () => console.error('Job queue connection/processing error.'));
+        this.boss.on('error', error => logFailure('queue', 'connection_or_processing', error));
     }
     async start() {
         await this.boss.start();

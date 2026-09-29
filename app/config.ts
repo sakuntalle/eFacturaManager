@@ -7,13 +7,12 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
     const environment = env.ANAF_ENV ?? 'prod';
     if (environment !== 'prod' && environment !== 'test') throw new Error('ANAF_ENV must be prod or test.');
     const publicUrl = new URL(env.APP_PUBLIC_URL ?? 'http://localhost:3100');
-    const password = env.APP_ADMIN_PASSWORD ?? 'local-development-only';
     const sessionSecret = env.APP_SESSION_SECRET ?? 'local-development-session-secret-change-before-hosting';
     if (!['localhost', '127.0.0.1'].includes(publicUrl.hostname)
-        && (password === 'local-development-only' || sessionSecret.startsWith('local-development'))) {
-        throw new Error('Set private APP_ADMIN_PASSWORD and APP_SESSION_SECRET before network hosting.');
+        && sessionSecret.startsWith('local-development')) {
+        throw new Error('Set a private APP_SESSION_SECRET before network hosting.');
     }
-    if (password.length < 12 || sessionSecret.length < 32) throw new Error('Admin password requires 12 characters; session secret requires 32.');
+    if (sessionSecret.length < 32) throw new Error('Session secret requires 32 characters.');
     const cif = (env.ANAF_CIF || (mode === 'mock' ? '12345678' : '')).replace(/^RO/i, '');
     if (!/^\d{1,30}$/.test(cif)) throw new Error('Set a numeric ANAF_CIF.');
     const mockUrl = new URL(env.ANAF_MOCK_URL ?? 'http://127.0.0.1:8790');
@@ -23,8 +22,7 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
     return {
         mode: mode as AnafMode, environment: environment as 'prod' | 'test', cif,
         databaseUrl: env.DATABASE_URL ?? 'postgres://efactura:local-development@127.0.0.1:55432/efactura',
-        publicUrl: publicUrl.origin, password, sessionSecret,
-        adminEmail: env.APP_ADMIN_EMAIL ?? 'admin@example.test',
+        publicUrl: publicUrl.origin, sessionSecret,
         port: Number(env.PORT ?? 3100),
         dataDir: resolve(env.DATA_DIR ?? '.local/app'),
         mockUrl: mockUrl.origin,

@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { runtime } from '../app/runtime.ts';
+import { passwordHash, verifyPassword } from '../app/admin-auth.ts';
+import { Sessions, SESSION_COOKIE } from '../app/sessions.ts';
+import { DEFAULT_CONNECTION_ID, WORKSPACE_ID } from '../app/adapters/postgres.ts';
 
 const sourceUrl = new URL(process.env.DATABASE_URL);
 const databaseName = `efactura_entities_${randomBytes(6).toString('hex')}`;
@@ -12,15 +15,57 @@ await admin.connect();
 let app;
 try {
     await admin.query(`CREATE DATABASE ${databaseName}`);
+    const legacy = new pg.Client({ connectionString: testUrl.toString() });
+    await legacy.connect();
+    const legacyConnection = { state: 'connected', encrypted: 'migration-encrypted-fixture',
+        fingerprint: 'migration-fingerprint', connectedAt: '2026-09-01T12:00:00.000Z' };
+    try {
+        await legacy.query('CREATE TABLE workspaces (id uuid PRIMARY KEY, name text NOT NULL)');
+        await legacy.query(`CREATE TABLE workspace_connections (
+            workspace_id uuid NOT NULL REFERENCES workspaces(id), mode text NOT NULL,
+            environment text NOT NULL, data jsonb NOT NULL, attempt jsonb,
+            PRIMARY KEY(workspace_id,mode,environment))`);
+        await legacy.query('INSERT INTO workspaces(id,name) VALUES ($1,$2)', [WORKSPACE_ID, 'My workspace']);
+        await legacy.query('INSERT INTO workspace_connections(workspace_id,mode,environment,data) VALUES ($1,$2,$3,$4)',
+            [WORKSPACE_ID, 'mock', process.env.ANAF_ENV ?? 'prod', legacyConnection]);
+    } finally { await legacy.end(); }
     process.env.DATABASE_URL = testUrl.toString();
     process.env.ANAF_MODE = 'mock';
     process.env.ANAF_CIF = '12345678';
     app = await runtime();
-    const first = await app.repo.company();
+    const first = await app.repo.createCompany({ name: 'First company', kind: 'company', cif: '12345678',
+        emailTo: 'first@example.org', emailEnabled: true, pollSeconds: 60 }, DEFAULT_CONNECTION_ID);
+    assert.deepEqual(await app.repo.connection(), legacyConnection,
+        'Existing workspace authorization must migrate without changing encrypted data');
+    assert.equal(first.connectionId, DEFAULT_CONNECTION_ID);
+    assert.equal(await app.repo.adminAccount(), null);
+    assert.equal(await app.repo.createAdmin(passwordHash('initial-admin-password')), true);
+    assert.equal(await app.repo.createAdmin(passwordHash('other-admin-password')), false);
+    const initialAdmin = await app.repo.adminAccount();
+    assert.equal(initialAdmin.mustChangePassword, true);
+    assert.equal(verifyPassword('initial-admin-password', initialAdmin.passwordHash), true);
+    const sessions = new Sessions(app.repo, app.cfg);
+    const { token } = await sessions.create(true);
+    assert.equal(await sessions.valid(`${SESSION_COOKIE}=${token}`), true);
+    assert.equal(await app.repo.changeAdminPassword(initialAdmin.passwordHash, passwordHash('changed-admin-password')), true);
+    assert.equal(await sessions.valid(`${SESSION_COOKIE}=${token}`), false);
+    assert.equal((await app.repo.adminAccount()).mustChangePassword, false);
+    assert.equal(await app.repo.changeAdminPassword(initialAdmin.passwordHash, passwordHash('stale-password')), false);
     const second = await app.repo.createCompany({ name: 'Another company', kind: 'company', cif: '87654321',
         emailTo: 'other@example.org', emailEnabled: false, pollSeconds: 90 });
+    const separate = await app.repo.createManagedConnection('Second authorization');
     const person = await app.repo.createCompany({ name: 'Individual', kind: 'individual', cif: '1234567890123',
-        emailTo: 'person@example.org', emailEnabled: true, pollSeconds: 120 });
+        emailTo: 'person@example.org', emailEnabled: true, pollSeconds: 120 }, separate.id);
+    assert.equal(person.connectionId, separate.id);
+    assert.equal((await app.repo.managedConnection(separate.id)).verificationCif, person.cif);
+    assert.deepEqual((await app.repo.managedConnections()).find(item => item.id === separate.id).entityIds, [person.id]);
+    assert.deepEqual(await app.repo.connection(), legacyConnection,
+        'Adding another connection must not replace the existing authorization');
+    await app.repo.forConnection(separate.id).withConnectionLock(tx => tx.write({ state: 'disconnected',
+        encrypted: null, fingerprint: 'second', connectedAt: null }));
+    assert.equal((await app.repo.forConnection(separate.id).connection()).fingerprint, 'second');
+    assert.deepEqual(await app.repo.connection(), legacyConnection,
+        'Connection records must remain isolated');
     assert.equal((await app.repo.companies()).length, 3);
     assert.equal((await app.scope(second.id)).cfg.smtp.to, 'other@example.org');
     assert.equal((await app.scope(person.id)).cfg.cif, '1234567890123');
@@ -90,12 +135,9 @@ try {
     const db = new pg.Client({ connectionString: testUrl.toString() });
     await db.connect();
     try {
-        const connection = { state: 'disconnected', encrypted: null, fingerprint: '', connectedAt: null };
-        await db.query(`CREATE TABLE anaf_connections (
-            company_id uuid PRIMARY KEY REFERENCES companies(id), data jsonb NOT NULL, attempt jsonb)`);
-        await db.query('INSERT INTO anaf_connections(company_id,data) VALUES ($1,$2)', [first.id, connection]);
+        const connection = await app.repo.connection();
         await app.repo.initialize();
-        assert.deepEqual(await app.repo.connection(), connection, 'Legacy ANAF connection moves to workspace storage');
+        assert.deepEqual(await app.repo.connection(), connection, 'ANAF connection survives repeated migrations');
         await app.scope(second.id).then(item => item.files.put('10001', 'zip', Buffer.from('test invoice archive')));
         assert.equal((await db.query('SELECT count(*)::integer AS count FROM invoice_files WHERE company_id=$1', [second.id])).rows[0].count, 1);
         assert.deepEqual(await app.repo.deleteCompany(second.id), { deleted: true, nextCompanyId: first.id });

@@ -61,9 +61,7 @@ export class AnafConnection {
         this.fingerprint = this.ready ? createHmac('sha256', this.key).update(JSON.stringify([
             cfg.oauth.clientId, cfg.oauth.clientSecret, cfg.oauth.redirectUri, cfg.cif, cfg.environment,
         ])).digest('hex') : '';
-        this.attemptFingerprint = createHmac('sha256', cfg.sessionSecret).update(JSON.stringify([
-            this.fingerprint, cfg.adminEmail, cfg.password,
-        ])).digest('hex');
+        this.attemptFingerprint = createHmac('sha256', cfg.sessionSecret).update(this.fingerprint).digest('hex');
     }
     async status(): Promise<ConnectionStatus> {
         if (this.cfg.mode === 'mock') return { state: 'mock', canConnect: false, connectedAt: null };

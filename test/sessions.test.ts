@@ -45,13 +45,11 @@ test('remembered sessions persist for 30 days and support restart, expiry and lo
     assert.equal(await restarted.valid(`${SESSION_COOKIE}=${next.token}`), false);
 });
 
-test('credential changes, forged tokens and malformed cookies cannot reuse a session', async () => {
+test('secret changes, forged tokens and malformed cookies cannot reuse a session', async () => {
     const { sessions, store } = harness();
     const { token } = await sessions.create(true);
     const header = `${SESSION_COOKIE}=${token}`;
-    for (const overrides of [{ APP_ADMIN_PASSWORD: 'changed-password' }, { APP_ADMIN_EMAIL: 'other@example.test' }, { APP_SESSION_SECRET: 'x'.repeat(32) }]) {
-        assert.equal(await new Sessions(store, config(overrides)).valid(header), false);
-    }
+    assert.equal(await new Sessions(store, config({ APP_SESSION_SECRET: 'x'.repeat(32) })).valid(header), false);
     assert.equal(await sessions.valid(`${SESSION_COOKIE}=${'0'.repeat(64)}`), false);
     assert.equal(await sessions.valid(), false);
     assert.equal(sessionToken('efactura_session=malformed'), undefined);

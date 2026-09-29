@@ -5,6 +5,7 @@ import { zipSync, strToU8 } from 'fflate';
 import { samplePdf, sampleXml } from './fixtures.js';
 import { mockInvoiceInput } from './invoice-input.js';
 import type { MockInvoiceInput } from './invoice-input.js';
+import { logFailure } from '../diagnostics.js';
 
 type Entry = { id: string; sequence: number; created: number; cif: string } & Partial<MockInvoiceInput>;
 const stateFile = resolve(process.env.MOCK_STATE_FILE ?? '.local/mock/invoices.json');
@@ -109,7 +110,11 @@ const server = createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/pdf' }).end(pdf); return;
         }
         json({ error: 'Unknown simulator endpoint' }, 404);
-    } catch { if (!res.headersSent) json({ error: 'Simulator request failed' }, 500); else res.end(); }
+    } catch (error) {
+        logFailure('mock', 'request', error);
+        if (!res.headersSent) json({ error: 'Simulator request failed' }, 500);
+        else res.end();
+    }
 });
 server.listen(Number(process.env.MOCK_PORT ?? 8790), process.env.MOCK_HOST ?? '127.0.0.1', () => console.log('ANAF simulator listening. All invoice data is synthetic.'));
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));

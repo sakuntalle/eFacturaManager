@@ -13,11 +13,10 @@ export function sessionToken(cookie?: string): string | undefined {
 }
 
 export class Sessions {
-    constructor(private store: SessionStore, private cfg: Pick<Config, 'sessionSecret' | 'adminEmail' | 'password' | 'publicUrl'>) {}
+    constructor(private store: SessionStore, private cfg: Pick<Config, 'sessionSecret' | 'publicUrl'>) {}
     private hash(token: string) {
-        // Credential or secret changes invalidate existing sessions without storing credentials.
         return createHmac('sha256', this.cfg.sessionSecret)
-            .update(JSON.stringify([this.cfg.adminEmail, this.cfg.password, token])).digest('hex');
+            .update(token).digest('hex');
     }
     cookieOptions() {
         return { httpOnly: true, sameSite: 'strict' as const, secure: this.cfg.publicUrl.startsWith('https:'), path: '/' };

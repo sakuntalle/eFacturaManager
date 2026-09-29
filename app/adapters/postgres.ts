@@ -7,6 +7,7 @@ import type { ConnectionStore, ConnectionRecord, ConnectionTransaction, OAuthAtt
 import type { EntityInput } from '../entity-input.js';
 
 export const WORKSPACE_ID = '00000000-0000-4000-8000-000000000001';
+export const DEFAULT_CONNECTION_ID = '00000000-0000-4000-8000-000000000002';
 const WORKSPACE = WORKSPACE_ID;
 // PostgreSQL-specific SQL and migrations remain inside this adapter.
 export class PostgresRepository implements Repository, SessionStore, ConnectionStore {
@@ -15,15 +16,18 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
     private cfg: Config;
     private ownsPool: boolean;
     private defaultSelection: boolean;
-    constructor(cfg: Config, companyId?: string, pool?: pg.Pool) {
+    private connectionId: string;
+    constructor(cfg: Config, companyId?: string, pool?: pg.Pool, connectionId = DEFAULT_CONNECTION_ID) {
         this.cfg = cfg;
         this.pool = pool ?? new pg.Pool({ connectionString: cfg.databaseUrl, max: 6 });
         this.ownsPool = !pool;
         this.defaultSelection = companyId === undefined;
+        this.connectionId = connectionId;
         const hex = createHash('sha256').update(`${WORKSPACE}:${cfg.mode}:${cfg.environment}:${cfg.cif}`).digest('hex');
         this.companyId = companyId ?? `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
     }
-    forCompany(id: string) { return new PostgresRepository(this.cfg, id, this.pool); }
+    forCompany(id: string) { return new PostgresRepository(this.cfg, id, this.pool, this.connectionId); }
+    forConnection(id: string) { return new PostgresRepository(this.cfg, this.companyId, this.pool, id); }
     async initialize() {
         const client = await this.pool.connect();
         try {
@@ -67,6 +71,11 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                 );
                 CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
                 INSERT INTO app_migrations(version) VALUES (2) ON CONFLICT DO NOTHING;
+                CREATE TABLE IF NOT EXISTS admin_accounts (
+                    username text PRIMARY KEY CHECK (username='admin'),
+                    password_hash text NOT NULL, must_change_password boolean NOT NULL DEFAULT true
+                );
+                INSERT INTO app_migrations(version) VALUES (6) ON CONFLICT DO NOTHING;
                 CREATE TABLE IF NOT EXISTS anaf_connections (
                     company_id uuid PRIMARY KEY REFERENCES companies(id), data jsonb NOT NULL,
                     attempt jsonb
@@ -75,6 +84,12 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                     workspace_id uuid NOT NULL REFERENCES workspaces(id), mode text NOT NULL,
                     environment text NOT NULL, data jsonb NOT NULL, attempt jsonb,
                     PRIMARY KEY(workspace_id,mode,environment)
+                );
+                CREATE TABLE IF NOT EXISTS managed_connections (
+                    id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspaces(id),
+                    mode text NOT NULL, environment text NOT NULL, name text NOT NULL,
+                    verification_cif text, data jsonb NOT NULL, attempt jsonb,
+                    created_at timestamptz NOT NULL DEFAULT now()
                 );
                 CREATE TABLE IF NOT EXISTS entity_bootstrap (
                     workspace_id uuid NOT NULL REFERENCES workspaces(id), mode text NOT NULL,
@@ -87,6 +102,7 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                 ALTER TABLE companies ADD COLUMN IF NOT EXISTS email_enabled boolean;
                 ALTER TABLE companies ADD COLUMN IF NOT EXISTS added_date_backfilled boolean NOT NULL DEFAULT false;
                 ALTER TABLE companies ADD COLUMN IF NOT EXISTS added_time_backfilled boolean NOT NULL DEFAULT false;
+                ALTER TABLE companies ADD COLUMN IF NOT EXISTS connection_id uuid;
                 ALTER TABLE invoices ADD COLUMN IF NOT EXISTS added_date text;
             `);
             await client.query(`UPDATE companies SET name=COALESCE(name, 'Company ' || cif),
@@ -104,17 +120,27 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                 ORDER BY c.workspace_id,c.mode,c.environment,c.id
                 ON CONFLICT(workspace_id,mode,environment) DO NOTHING`);
             await client.query('DROP TABLE anaf_connections');
-            const bootstrapped = await client.query(`INSERT INTO entity_bootstrap(workspace_id,mode,environment)
-                VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING workspace_id`,
-            [WORKSPACE, this.cfg.mode, this.cfg.environment]);
-            if (bootstrapped.rowCount) {
-                await client.query(`INSERT INTO companies(id,workspace_id,cif,mode,environment,name,kind,email_to,email_enabled)
-                    SELECT $1,$2,$3,$4,$5,$6,'company',$7,$8 WHERE NOT EXISTS (
-                        SELECT 1 FROM companies WHERE workspace_id=$2 AND mode=$4 AND environment=$5)
-                    ON CONFLICT DO NOTHING`,
-                [this.companyId, WORKSPACE, this.cfg.cif, this.cfg.mode, this.cfg.environment,
-                    `Company ${this.cfg.cif}`, this.cfg.smtp.to, this.cfg.emailEnabled]);
-            }
+            await client.query(`INSERT INTO managed_connections
+                (id,workspace_id,mode,environment,name,verification_cif,data,attempt)
+                SELECT $1,$2,$3,$4,'Primary ANAF connection',$5,
+                    COALESCE(w.data,$6::jsonb),w.attempt
+                FROM workspaces s LEFT JOIN workspace_connections w ON w.workspace_id=s.id
+                    AND w.mode=$3 AND w.environment=$4
+                WHERE s.id=$2 AND (w.workspace_id IS NOT NULL OR EXISTS (
+                    SELECT 1 FROM companies c WHERE c.workspace_id=$2 AND c.mode=$3 AND c.environment=$4
+                )) ON CONFLICT(id) DO NOTHING`,
+            [DEFAULT_CONNECTION_ID, WORKSPACE, this.cfg.mode, this.cfg.environment, this.cfg.cif,
+                JSON.stringify({ state: 'disconnected', encrypted: null, fingerprint: '', connectedAt: null })]);
+            await client.query('UPDATE companies SET connection_id=$1 WHERE workspace_id=$2 AND connection_id IS NULL',
+                [DEFAULT_CONNECTION_ID, WORKSPACE]);
+            await client.query(`DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='companies_connection_id_fkey') THEN
+                    ALTER TABLE companies ADD CONSTRAINT companies_connection_id_fkey
+                        FOREIGN KEY (connection_id) REFERENCES managed_connections(id);
+                END IF;
+            END $$`);
+            await client.query('CREATE INDEX IF NOT EXISTS companies_connection_id_idx ON companies(connection_id)');
+            await client.query('INSERT INTO app_migrations(version) VALUES (7) ON CONFLICT DO NOTHING');
             await client.query('COMMIT');
         } catch (error) { await client.query('ROLLBACK'); throw error; }
         finally { client.release(); }
@@ -221,6 +247,7 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
     }
     private mapCompany(r: pg.QueryResultRow): Company {
         return { id: r.id, workspaceId: r.workspace_id, cif: r.cif, name: r.name, kind: r.kind,
+            connectionId: r.connection_id ?? DEFAULT_CONNECTION_ID,
             emailTo: r.email_to, emailEnabled: r.email_enabled, mode: r.mode, environment: r.environment,
             pollSeconds: r.poll_seconds, lastSync: r.last_sync?.toISOString() ?? null, nextSync: r.next_sync.toISOString(),
             syncError: r.sync_error, initialized: r.initialized };
@@ -235,23 +262,71 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
             AND mode=$3 AND environment=$4`, [id, WORKSPACE, this.cfg.mode, this.cfg.environment]);
         return r ? this.mapCompany(r) : null;
     }
-    async createCompany(input: EntityInput): Promise<Company> {
-        const id = randomUUID();
-        const { rows: [r] } = await this.pool.query(`INSERT INTO companies
-            (id,workspace_id,cif,mode,environment,name,kind,email_to,email_enabled,poll_seconds)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-            [id, WORKSPACE, input.cif, this.cfg.mode, this.cfg.environment, input.name, input.kind,
-                input.emailTo, input.emailEnabled, input.pollSeconds]);
-        return this.mapCompany(r);
+    async managedConnections(): Promise<{ id: string; name: string; verificationCif: string | null; entityIds: string[] }[]> {
+        const { rows } = await this.pool.query(`SELECT m.id,m.name,m.verification_cif,
+            COALESCE(array_agg(c.id ORDER BY c.name) FILTER (WHERE c.id IS NOT NULL),ARRAY[]::uuid[]) AS entity_ids
+            FROM managed_connections m LEFT JOIN companies c ON c.connection_id=m.id
+            WHERE m.workspace_id=$1 AND m.mode=$2 AND m.environment=$3
+            GROUP BY m.id ORDER BY m.created_at,m.id`, [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+        return rows.map(r => ({ id: r.id, name: r.name, verificationCif: r.verification_cif, entityIds: r.entity_ids }));
     }
-    async updateCompany(input: EntityInput): Promise<Company> {
-        const { rows: [r] } = await this.pool.query(`UPDATE companies SET name=$2,kind=$3,email_to=$4,
-            email_enabled=$5,poll_seconds=$6,next_sync=now() WHERE id=$1 AND workspace_id=$7
-            AND mode=$8 AND environment=$9 AND cif=$10 RETURNING *`,
+    async managedConnection(id: string): Promise<{ id: string; name: string; verificationCif: string | null } | null> {
+        const { rows: [r] } = await this.pool.query(`SELECT id,name,verification_cif FROM managed_connections
+            WHERE id=$1 AND workspace_id=$2 AND mode=$3 AND environment=$4`,
+        [id, WORKSPACE, this.cfg.mode, this.cfg.environment]);
+        return r ? { id: r.id, name: r.name, verificationCif: r.verification_cif } : null;
+    }
+    async createManagedConnection(name: string) {
+        const id = randomUUID();
+        await this.pool.query(`INSERT INTO managed_connections
+            (id,workspace_id,mode,environment,name,data) VALUES ($1,$2,$3,$4,$5,$6)`,
+        [id, WORKSPACE, this.cfg.mode, this.cfg.environment, name,
+            { state: 'disconnected', encrypted: null, fingerprint: '', connectedAt: null }]);
+        return { id, name, verificationCif: null, entityIds: [] as string[] };
+    }
+    async createCompany(input: EntityInput, connectionId = DEFAULT_CONNECTION_ID): Promise<Company> {
+        const client = await this.pool.connect();
+        const id = randomUUID();
+        try {
+            await client.query('BEGIN');
+            if (!(await client.query(`SELECT id FROM managed_connections WHERE id=$1 AND workspace_id=$2
+                AND mode=$3 AND environment=$4 FOR UPDATE`,
+            [connectionId, WORKSPACE, this.cfg.mode, this.cfg.environment])).rowCount) {
+                throw new Error('ANAF connection does not exist.');
+            }
+            const { rows: [r] } = await client.query(`INSERT INTO companies
+                (id,workspace_id,cif,mode,environment,name,kind,email_to,email_enabled,poll_seconds,connection_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+            [id, WORKSPACE, input.cif, this.cfg.mode, this.cfg.environment, input.name, input.kind,
+                input.emailTo, input.emailEnabled, input.pollSeconds, connectionId]);
+            await client.query('UPDATE managed_connections SET verification_cif=$2 WHERE id=$1 AND verification_cif IS NULL',
+            [connectionId, input.cif]);
+            await client.query('COMMIT');
+            return this.mapCompany(r);
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
+    }
+    async updateCompany(input: EntityInput, connectionId = DEFAULT_CONNECTION_ID): Promise<Company> {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            if (!(await client.query(`SELECT id FROM managed_connections WHERE id=$1 AND workspace_id=$2
+                AND mode=$3 AND environment=$4 FOR UPDATE`,
+            [connectionId, WORKSPACE, this.cfg.mode, this.cfg.environment])).rowCount) {
+                throw new Error('ANAF connection does not exist.');
+            }
+            const { rows: [r] } = await client.query(`UPDATE companies SET name=$2,kind=$3,email_to=$4,
+                email_enabled=$5,poll_seconds=$6,next_sync=now(),connection_id=$11 WHERE id=$1 AND workspace_id=$7
+                AND mode=$8 AND environment=$9 AND cif=$10 RETURNING *`,
             [this.companyId, input.name, input.kind, input.emailTo, input.emailEnabled,
-                input.pollSeconds, WORKSPACE, this.cfg.mode, this.cfg.environment, input.cif]);
-        if (!r) throw new Error('Company does not exist or fiscal identifier cannot be changed.');
-        return this.mapCompany(r);
+                input.pollSeconds, WORKSPACE, this.cfg.mode, this.cfg.environment, input.cif, connectionId]);
+            if (!r) throw new Error('Company does not exist or fiscal identifier cannot be changed.');
+            await client.query('UPDATE managed_connections SET verification_cif=$2 WHERE id=$1 AND verification_cif IS NULL',
+            [connectionId, input.cif]);
+            await client.query('COMMIT');
+            return this.mapCompany(r);
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
     }
     async deleteCompany(id: string): Promise<{ deleted: boolean; nextCompanyId: string | null }> {
         const client = await this.pool.connect();
@@ -389,6 +464,33 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         return (await this.pool.query(`UPDATE outbox SET published_at=NULL,status='pending',attempts=0,error=NULL
             WHERE id=$1 AND company_id=$2 AND status IN ('failed','skipped')`, [id, this.companyId])).rowCount === 1;
     }
+    async adminAccount(): Promise<{ passwordHash: string; mustChangePassword: boolean } | null> {
+        const { rows: [row] } = await this.pool.query(`SELECT password_hash,must_change_password
+            FROM admin_accounts WHERE username='admin'`);
+        return row ? { passwordHash: row.password_hash, mustChangePassword: row.must_change_password } : null;
+    }
+    async createAdmin(passwordHash: string) {
+        return (await this.pool.query(`INSERT INTO admin_accounts(username,password_hash)
+            VALUES ('admin',$1) ON CONFLICT DO NOTHING`, [passwordHash])).rowCount === 1;
+    }
+    async changeAdminPassword(previousHash: string, nextHash: string) {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const result = await client.query(`UPDATE admin_accounts SET password_hash=$2,must_change_password=false
+                WHERE username='admin' AND password_hash=$1`, [previousHash, nextHash]);
+            if (result.rowCount !== 1) {
+                await client.query('ROLLBACK');
+                return false;
+            }
+            await client.query('DELETE FROM auth_sessions WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('UPDATE workspace_connections SET attempt=NULL WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('UPDATE managed_connections SET attempt=NULL WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('COMMIT');
+            return true;
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
+    }
     async saveSession(tokenHash: string, expiresAt: Date) {
         await this.pool.query('DELETE FROM auth_sessions WHERE workspace_id=$1 AND expires_at<=now()', [WORKSPACE]);
         await this.pool.query('INSERT INTO auth_sessions(token_hash,workspace_id,expires_at) VALUES ($1,$2,$3)', [tokenHash, WORKSPACE, expiresAt]);
@@ -400,38 +502,37 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         await this.pool.query('DELETE FROM auth_sessions WHERE token_hash=$1 AND workspace_id=$2', [tokenHash, WORKSPACE]);
     }
     async connection(): Promise<ConnectionRecord | null> {
-        const { rows: [row] } = await this.pool.query(`SELECT data FROM workspace_connections
-            WHERE workspace_id=$1 AND mode=$2 AND environment=$3`, [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+        const { rows: [row] } = await this.pool.query(`SELECT data FROM managed_connections
+            WHERE id=$1 AND workspace_id=$2 AND mode=$3 AND environment=$4`,
+        [this.connectionId, WORKSPACE, this.cfg.mode, this.cfg.environment]);
         return row?.data ?? null;
     }
     async withConnectionLock<T>(work: (transaction: ConnectionTransaction) => Promise<T>): Promise<T> {
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
-            await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`${this.companyId}:oauth`]);
-            const read = async () => (await client.query(`SELECT data,attempt FROM workspace_connections
-                WHERE workspace_id=$1 AND mode=$2 AND environment=$3`, [WORKSPACE, this.cfg.mode, this.cfg.environment])).rows[0];
+            await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`${this.connectionId}:oauth`]);
+            const read = async () => (await client.query(`SELECT data,attempt FROM managed_connections
+                WHERE id=$1 AND workspace_id=$2 AND mode=$3 AND environment=$4`,
+            [this.connectionId, WORKSPACE, this.cfg.mode, this.cfg.environment])).rows[0];
             const result = await work({
                 hasSession: async tokenHash => (await client.query('SELECT 1 FROM auth_sessions WHERE token_hash=$1 AND workspace_id=$2 AND expires_at>now()', [tokenHash, WORKSPACE])).rowCount === 1,
                 read: async () => (await read())?.data ?? null,
                 write: async data => {
-                    await client.query(`INSERT INTO workspace_connections(workspace_id,mode,environment,data)
-                        VALUES ($1,$2,$3,$4) ON CONFLICT(workspace_id,mode,environment)
-                        DO UPDATE SET data=EXCLUDED.data`, [WORKSPACE, this.cfg.mode, this.cfg.environment, data]);
+                    await client.query('UPDATE managed_connections SET data=$2 WHERE id=$1', [this.connectionId, data]);
                 },
                 attempt: async () => (await read())?.attempt as OAuthAttempt ?? null,
                 saveAttempt: async attempt => {
-                    await client.query(`INSERT INTO workspace_connections(workspace_id,mode,environment,data,attempt)
-                        VALUES ($1,$2,$3,$4,$5) ON CONFLICT(workspace_id,mode,environment)
-                        DO UPDATE SET attempt=EXCLUDED.attempt`, [WORKSPACE, this.cfg.mode, this.cfg.environment,
-                        { state: 'disconnected', encrypted: null, fingerprint: '', connectedAt: null }, attempt]);
+                    await client.query('UPDATE managed_connections SET attempt=$2 WHERE id=$1', [this.connectionId, attempt]);
                 },
                 resume: async () => {
                     await client.query(`UPDATE companies SET next_sync=now(),sync_error=NULL
-                        WHERE workspace_id=$1 AND mode=$2 AND environment=$3`, [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+                        WHERE connection_id=$1 AND workspace_id=$2 AND mode=$3 AND environment=$4`,
+                    [this.connectionId, WORKSPACE, this.cfg.mode, this.cfg.environment]);
                     await client.query(`UPDATE outbox SET published_at=NULL WHERE kind='invoice.pdf' AND status='pending'
-                        AND company_id IN (SELECT id FROM companies WHERE workspace_id=$1 AND mode=$2 AND environment=$3)`,
-                    [WORKSPACE, this.cfg.mode, this.cfg.environment]);
+                        AND company_id IN (SELECT id FROM companies WHERE connection_id=$1 AND workspace_id=$2
+                            AND mode=$3 AND environment=$4)`,
+                    [this.connectionId, WORKSPACE, this.cfg.mode, this.cfg.environment]);
                 },
             });
             await client.query('COMMIT');

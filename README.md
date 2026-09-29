@@ -7,26 +7,42 @@ A self-hosted TypeScript application for collecting and viewing Romanian e-Factu
 ## Start with Docker
 
 ```sh
+npm ci
+docker compose --env-file .env.example up -d database
+DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
 docker compose --env-file .env.example up --build -d
 ```
 
 This explicitly uses the supplied local development configuration, avoiding any existing live credentials in `.env`.
 
 - Application: <http://localhost:3100>
-- Sign in: `admin@example.test` / `local-development-only`
+- Sign in: username `admin`; read the unique 12-character temporary password in `.local/admin/README.md`
 - Local email inbox (Mailpit): <http://localhost:8025>
 
-Check **Remember me** at sign-in to stay signed in for 30 days on that browser. Unchecked, the cookie lasts for the browser session and access expires after eight hours. Sessions persist across application restarts. Signing out revokes that session; changing the administrator credentials or session secret invalidates existing sessions. Some browsers restore session cookies when restoring a previous browsing session.
+The bootstrap command creates the one administrator account in PostgreSQL and writes its initial password to the local, Git-ignored README with owner-only file permissions. It generates the password once for a new database; rerunning the command leaves an existing account unchanged. The first login requires a password change before any workspace page or API can be used. After that change, the app opens **Manage ANAF connections**. A fresh workspace has no entities or connections: create a connection, add a company or individual linked to it, then authorize it in live mode. Existing installations retain their entities and connections. Use the same bootstrap command with your local `.env` when upgrading an existing installation. Never copy the local password README into a public repository.
 
-The first sync imports three synthetic invoices and generates their PDFs. Initial imports do **not** send individual invoice emails. In **Mocked ANAF**, choose **Create simulated invoice**, enter a supplier name and invoice amount in RON, and submit the form. Numbers increment automatically. Amounts accept a comma or dot and up to two decimal places; these custom simulated invoices use zero VAT. Then choose **Sync now** (or wait for the next scheduled poll). The invoice appears in the inbox, its PDF becomes available, and its notification arrives in Mailpit. Open **Activity** to inspect processing, retries and errors.
+To try the first-login screen again without changing your existing administrator or data, start a separate local instance from the current build:
 
-This is a local-first development version. Published ports bind to loopback. Default application/database credentials are local development values; replace them before hosting elsewhere. One administrator manages multiple companies and individuals in one workspace. Each entity has its own invoice archive, polling schedule, notification address and job history. Viewer accounts are not implemented.
+```sh
+npm run build
+npm run first-login:start
+```
+
+Open <http://localhost:3201>, sign in as `admin`, and read the generated temporary password in `.local/first-login-demo/admin/README.md`. This test instance starts with no managed entities or ANAF connections. It uses its own temporary PostgreSQL database, mock ANAF mode and disabled email delivery. It does not start a worker. When finished, run `npm run first-login:stop` to stop the test site and remove only its temporary database. Run `npm run first-login:start` again to repeat the flow with a fresh account.
+
+Check **Remember me** at sign-in to stay signed in for 30 days on that browser. Unchecked, the cookie lasts for the browser session and access expires after eight hours. Sessions persist across application restarts. Signing out revokes that session; changing the administrator password revokes all existing sessions. Some browsers restore session cookies when restoring a previous browsing session.
+
+After adding a connection and a managed entity in mock mode, the first sync imports three synthetic invoices and generates their PDFs. Initial imports do **not** send individual invoice emails. In **Mocked ANAF**, choose **Create simulated invoice**, enter a supplier name and invoice amount in RON, and submit the form. Numbers increment automatically. Amounts accept a comma or dot and up to two decimal places; these custom simulated invoices use zero VAT. Then choose **Sync now** (or wait for the next scheduled poll). The invoice appears in the inbox, its PDF becomes available, and its notification arrives in Mailpit. Open **Activity** to inspect processing, retries and errors.
+
+This is a local-first development version. Published ports bind to loopback. Default database credentials and session secret are local development values; replace them before hosting elsewhere. One administrator manages multiple companies and individuals in one workspace. Each entity has its own invoice archive, polling schedule, notification address and job history. Viewer accounts are not implemented.
 
 The **Dark mode** switch stays in the top-right corner while scrolling and is also available on the sign-in page. The invoice form inherits the main UI theme without its own switch. The initial theme follows your system preference; your selection is saved in this browser.
 
-The **Mocked ANAF** sidebar tab appears only when `ANAF_MODE=mock`. It groups simulator controls, mock notices and recent email notification statuses. In **Settings**, the administrator can add a Company (CIF/CUI) or Individual (CNP), edit its name, polling interval and notification address, and enable or disable its emails. The sidebar selector switches the inbox and activity view between entities.
+The sidebar always shows **Managed companies** and **Managed individuals**. Select an entity, then use the **Invoices**, **Activity** and **Settings** tabs above the main view. **Manage ANAF connections** lists authorizations, their status and linked entities; it can create another connection and open the entity form with that connection selected. **Add managed entity** opens the Company (CIF/CUI) or Individual (CNP) creation form, where the ANAF connection is selected. An entity’s connection can also be changed in its Settings. The **Mocked ANAF** tab appears only when `ANAF_MODE=mock` and groups simulator controls and recent notification statuses. The bottom-left profile identifies the administrator.
 
-The administrator can also delete the selected company or individual in **Settings**. A confirmation dialog explains that this permanently removes its stored invoices, ZIPs, PDFs and activity. The shared ANAF connection and other entities remain available. If the last entity is deleted, the app presents the add-entity form; deleted entities do not return after restart.
+The in-app **Back** button returns to the previous workspace view, including the selected entity and tab. It works when moving through sidebar items, entity tabs, connection links and the add-entity form.
+
+The administrator can also delete the selected company or individual in **Settings**. A confirmation dialog explains that this permanently removes its stored invoices, ZIPs, PDFs and activity. ANAF connections and other entities remain available. If the last entity is deleted, **Add managed entity** remains available; deleted entities do not return after restart.
 
 
 ## Configure your own SMTP provider
@@ -105,12 +121,16 @@ npm test
 Verify the local Docker stack (not your real SMTP configuration):
 
 ```sh
+docker compose --env-file .env.example up -d database
+DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
 docker compose --env-file .env.example up --build -d
-npm run test:integration
+npm run test:admin
+npm run test:entities
+npm run test:connection
 npm run test:browser
 ```
 
-The integration test requires the default mock company/admin and Mailpit recipient. It creates synthetic invoices and keeps them for inspection. Browser tests use installed Google Chrome through Playwright; alternatively set `PLAYWRIGHT_CHANNEL=chromium` and install Playwright's Chromium.
+The isolated admin, entity and connection tests use temporary databases and do not change the running app's credentials or invoice data. All Playwright browser tests use controlled API responses and run without an administrator password; they do not change the running app's entities or invoices. For the normal HTTPS app, run `PLAYWRIGHT_BASE_URL=https://localhost:8765 npm run test:browser`. The optional `test:integration` uses the local mock stack and requires `TEST_ADMIN_PASSWORD` to be set to its current administrator password. Browser tests use installed Google Chrome through Playwright; alternatively set `PLAYWRIGHT_CHANNEL=chromium` and install Playwright's Chromium.
 
 ## Architecture
 
@@ -144,15 +164,15 @@ Mock mode uses a dedicated synthetic token and never forwards real ANAF tokens o
 
 ## Live ANAF remains an integration milestone
 
-`ANAF_MODE=live` uses one in-app ANAF connection for the workspace. Sign in with the administrator email/password, then choose **Connect to ANAF**. The browser opens ANAF certificate authorization and returns to the registered HTTPS `/callback`. The backend verifies access to the original CIF before saving the connection. The same certificate-backed token is used for each configured company or individual; ANAF must grant that certificate access to each fiscal identifier. Each entity’s first import suppresses individual invoice emails.
+`ANAF_MODE=live` supports multiple in-app ANAF connections. Existing entities and the saved authorization remain linked to **Primary ANAF connection** after upgrade. Sign in as `admin`, change the temporary password if prompted, then open **Manage ANAF connections**. One connection can serve multiple entities when its certificate has access to their fiscal identifiers. To use another authorization, create a named connection, add or assign an entity to it, then connect through the browser with the appropriate certificate. The backend verifies access to the first linked fiscal identifier before saving that connection. Each entity’s first import suppresses individual invoice emails.
 
-Connection status and Disconnect are under **Settings**. Signing out ends only the browser session. Disconnect deletes the locally stored authorization and stops future ANAF requests; it retains collected documents and does not revoke the grant at ANAF. A request already in flight may finish. Authorization failures display a reconnect prompt; temporary service errors retain the connection and retry.
+Connection status, Connect, Reconnect and Disconnect are under **Manage ANAF connections**, separate from entity Settings. Signing out ends only the browser session. Disconnect deletes that connection’s locally stored authorization and pauses collection for its linked entities; other connections continue working. It retains collected documents and does not revoke the grant at ANAF. A request already in flight may finish. Authorization failures display a reconnect prompt; temporary service errors retain the connection and retry.
 
 Each deployment needs its own registration. Deployment credentials stay in server configuration and are never included in the status API or UI. The client identifier necessarily appears in the browser's authorization redirect to ANAF; the secret never does. Access/refresh tokens are encrypted with AES-256-GCM in PostgreSQL using a separate deployment key. Back up that key securely alongside your normal backup process; losing it requires reconnecting. Refresh is serialized across web and worker processes, and rotated refresh tokens are saved atomically. Legacy app access-token/token-file settings are no longer used.
 
 See [live HTTPS setup](docs/live-connection.md). The retained [diagnostic CLI](docs/poc.md) is independent and is not required for the application flow. Its plaintext diagnostic token files are not imported by the app.
 
-The integrated flow is tested against simulated OAuth responses over real local HTTPS and PostgreSQL. The qualified-certificate round trip and real invoice/PDF responses still need validation with ANAF. Listing is currently non-paginated and is not a complete archival/backfill implementation. The inbox shows up to 200 invoices in the selected date order.
+The integrated flow is tested against simulated OAuth responses over real local HTTPS and PostgreSQL. The qualified-certificate round trip and real invoice/PDF responses still need validation with ANAF. ANAF message listing is currently non-paginated and is not a complete archival/backfill implementation. The stored invoice inbox is paginated at 50 invoices per page.
 
 The inbox defaults to sorting by ANAF Added date and time, newest first; both Added date and Issue date headings can reverse the order. Dates display as `DD/MM/YYYY`, and Added date includes the ANAF time as `HH:mm`. On upgrade, the worker revisits the available 60-day ANAF message list once per entity to fill time on previously collected invoices. If ANAF no longer lists an older message, the stored date remains visible with "time unavailable" rather than inventing a time.
 
@@ -161,6 +181,8 @@ The inbox defaults to sorting by ANAF Added date and time, newest first; both Ad
 PostgreSQL stores parsed invoice details and the original ZIP and generated PDF bytes in a separate document table. The XML remains inside the ZIP and is extracted when needed. Back up the PostgreSQL database to preserve both invoice details and documents. The app no longer mounts or writes an `invoice-data` volume. Installations upgrading from an older version must migrate their legacy files into PostgreSQL before using this Compose configuration. `docker compose down` preserves volumes; `down -v` deletes them.
 
 Administrator sessions are stored in PostgreSQL as token hashes with server-side expiry, behind a replaceable session-store contract. The current worker processes one job at a time per queue; jobs have a five-minute execution timeout. The ZIP is stored before committing its invoice/outbox record; a crash can leave an orphan document row, which a subsequent sync reuses. Full archival completeness, long-running job heartbeats and packaged backup/upgrade tooling are future work.
+
+To diagnose failures, run `docker compose --env-file .env -f compose.yaml -f compose.https.yaml logs --tail 200 web worker`. Structured JSON log entries show the module, failing stage, a stable opaque entity reference, and allowlisted HTTP, database or network codes. The selected entity’s reference appears in Settings. Logs omit raw ANAF responses, OAuth values, invoice contents, fiscal identifiers and SMTP error text. Successful syncs log their imported invoice count and duration.
 
 For cloud hosting later, substitute managed storage/queue adapters and add deployment-specific HTTPS, secret management and monitoring. Windows/Linux Docker compatibility follows the Linux-container packaging, but those host systems have not yet been separately exercised.
 

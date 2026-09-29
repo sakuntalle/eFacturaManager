@@ -9,6 +9,7 @@ test('invoice details open on the right from a scrolled list and remain usable o
     }));
     await page.route('**/api/**', route => {
         const path = new URL(route.request().url()).pathname;
+        if (path === '/api/session') return route.fulfill({ json: { username: 'admin', mustChangePassword: false } });
         const company = { id: '00000000-0000-4000-8000-000000000001', name: 'Test company', kind: 'company',
             cif: '12345678', emailTo: 'developer@example.test', emailEnabled: true,
             pollSeconds: 60, initialized: true, environment: 'prod', lastSync: null, syncError: null };

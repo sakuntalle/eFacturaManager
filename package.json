@@ -20,7 +20,11 @@
         "test:browser": "playwright test",
         "test:connection": "npm run build && node scripts/connection-integration.mjs",
         "test:entities": "node --import tsx --env-file=.env scripts/entities-integration.mjs",
+        "test:admin": "node --import tsx --env-file=.env scripts/admin-bootstrap-integration.mjs",
         "test:files": "node --import tsx --env-file=.env scripts/file-storage-integration.mjs",
+        "admin:bootstrap": "node --import tsx --env-file-if-exists=.env scripts/bootstrap-admin.mjs",
+        "first-login:start": "node --env-file=.env scripts/first-login-demo.mjs start",
+        "first-login:stop": "node --env-file=.env scripts/first-login-demo.mjs stop",
         "email:test": "node --env-file=.env scripts/email-smoke.mjs"
     },
     "dependencies": {

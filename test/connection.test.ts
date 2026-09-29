@@ -130,11 +130,12 @@ test('mock and incomplete live deployments never authorize with a fallback token
     }
 });
 
-test('changing app login credentials invalidates an outstanding authorization without disconnecting an existing grant', async () => {
+test('revoking an app session invalidates an outstanding authorization without disconnecting an existing grant', async () => {
     const f = fixture();
     await f.connect();
     const start = await f.connection.begin('session-hash');
-    const restarted = new AnafConnection({ ...cfg, password: 'a-new-admin-password' }, f.store, f.gateway);
+    f.store.session = false;
+    const restarted = new AnafConnection(cfg, f.store, f.gateway);
     assert.equal(await restarted.complete(f.callback(start), start.binding), false);
     assert.equal((await restarted.status()).state, 'connected');
 });

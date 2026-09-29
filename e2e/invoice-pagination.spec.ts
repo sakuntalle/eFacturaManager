@@ -11,6 +11,7 @@ test('all invoices remain reachable through pagination and search', async ({ pag
     }));
     await page.route('**/api/**', route => {
         const url = new URL(route.request().url());
+        if (url.pathname === '/api/session') return route.fulfill({ json: { username: 'admin', mustChangePassword: false } });
         if (url.pathname === '/api/status') return route.fulfill({ json: { company, companies: [company], mode: 'live',
             emailEnabled: true, emailTo: company.emailTo, connection: { state: 'connected', canConnect: true, connectedAt: null } } });
         if (url.pathname === '/api/invoices') {

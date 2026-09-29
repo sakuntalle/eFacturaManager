@@ -7,6 +7,7 @@ import { mockInvoiceInput } from '../app/mock/invoice-input.js';
 import { invoiceXml, parseInvoice } from '../app/invoice-xml.js';
 import { Workflows } from '../app/workflows.js';
 import { addedTimestamp } from '../src/anaf.js';
+import { AnafHttpError } from '../src/anaf.js';
 import { formatAddedDate, formatAppDateTime, formatInvoiceDate } from '../web/src/invoice-date.js';
 import type { Event, Invoice, Repository, JobQueue, InvoiceFiles, AnafGateway, NotificationChannel } from '../app/contracts.js';
 
@@ -168,6 +169,20 @@ test('outbox publishing failure leaves event eligible for later dispatch', async
     h.queue.publish = async () => { throw new Error('Queue unavailable'); };
     await assert.rejects(h.workflows.dispatch());
     assert.equal((await h.repo.pendingEvents()).length, 2);
+});
+
+test('invoice collection logs a safe failure stage when ANAF listing fails', async t => {
+    const lines: string[] = [];
+    t.mock.method(console, 'error', (line: string) => lines.push(line));
+    const h = harness(true);
+    h.gateway.list = async () => { throw new AnafHttpError(503, 'private provider response and token'); };
+    await assert.rejects(h.workflows.sync(), /ANAF returned HTTP 503/);
+    assert.equal(lines.length, 1);
+    const entry = JSON.parse(lines[0]);
+    assert.equal(entry.stage, 'invoice_list');
+    assert.equal(entry.category, 'anaf_http');
+    assert.equal(entry.httpStatus, 503);
+    assert.equal(lines[0].includes('private provider response'), false);
 });
 
 test('invoice amount includes VAT regardless of paid amounts, outstanding balances or rounding', () => {

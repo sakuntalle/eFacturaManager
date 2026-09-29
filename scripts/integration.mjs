@@ -25,7 +25,8 @@ async function until(description, check) {
 }
 assert.equal((await fetch(`${origin}/api/invoices`)).status, 401, 'Invoices require sign-in');
 assert.equal((await fetch(`${origin}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://untrusted.example' }, body: '{}' })).status, 403, 'Cross-origin mutation rejected');
-await api('login', { email: 'admin@example.test', password: 'local-development-only' });
+assert.ok(process.env.TEST_ADMIN_PASSWORD, 'Set TEST_ADMIN_PASSWORD to run this local mock integration test.');
+await api('login', { username: 'admin', password: process.env.TEST_ADMIN_PASSWORD });
 const status = await api('status');
 assert.equal(status.mode, 'mock', 'Integration test requires mock mode');
 assert.equal(status.emailTo, 'developer@example.test', 'Integration test requires local test recipient');

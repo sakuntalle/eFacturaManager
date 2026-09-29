@@ -12,8 +12,6 @@ x-app-environment: &app-environment
     DATABASE_URL: postgres://efactura:${POSTGRES_PASSWORD:-local-development}@database:5432/efactura
     DATA_DIR: /app/data
     APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3100}
-    APP_ADMIN_EMAIL: ${APP_ADMIN_EMAIL:-admin@example.test}
-    APP_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:-local-development-only}
     APP_SESSION_SECRET: ${APP_SESSION_SECRET:-local-development-session-secret-change-before-hosting}
     EMAIL_ENABLED: ${EMAIL_ENABLED:-true}
     EMAIL_FROM: ${EMAIL_FROM:-eFactura Manager <invoices@example.test>}
