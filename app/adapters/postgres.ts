@@ -75,6 +75,12 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                     username text PRIMARY KEY CHECK (username='admin'),
                     password_hash text NOT NULL, must_change_password boolean NOT NULL DEFAULT true
                 );
+                CREATE TABLE IF NOT EXISTS admin_password_resets (
+                    workspace_id uuid PRIMARY KEY REFERENCES workspaces(id),
+                    token_hash text NOT NULL UNIQUE,
+                    email_to text NOT NULL,
+                    expires_at timestamptz NOT NULL
+                );
                 INSERT INTO app_migrations(version) VALUES (6) ON CONFLICT DO NOTHING;
                 CREATE TABLE IF NOT EXISTS anaf_connections (
                     company_id uuid PRIMARY KEY REFERENCES companies(id), data jsonb NOT NULL,
@@ -141,6 +147,7 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
             END $$`);
             await client.query('CREATE INDEX IF NOT EXISTS companies_connection_id_idx ON companies(connection_id)');
             await client.query('INSERT INTO app_migrations(version) VALUES (7) ON CONFLICT DO NOTHING');
+            await client.query('INSERT INTO app_migrations(version) VALUES (8) ON CONFLICT DO NOTHING');
             await client.query('COMMIT');
         } catch (error) { await client.query('ROLLBACK'); throw error; }
         finally { client.release(); }
@@ -473,6 +480,39 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         return (await this.pool.query(`INSERT INTO admin_accounts(username,password_hash)
             VALUES ('admin',$1) ON CONFLICT DO NOTHING`, [passwordHash])).rowCount === 1;
     }
+    async registeredRecoveryEmail(email: string): Promise<string | null> {
+        const { rows: [row] } = await this.pool.query(`SELECT email_to FROM companies
+            WHERE workspace_id=$1 AND lower(email_to)=lower($2) LIMIT 1`, [WORKSPACE, email]);
+        return row?.email_to ?? null;
+    }
+    async issuePasswordReset(tokenHash: string, email: string, expiresAt: Date) {
+        await this.pool.query(`INSERT INTO admin_password_resets(workspace_id,token_hash,email_to,expires_at)
+            VALUES ($1,$2,$3,$4) ON CONFLICT(workspace_id) DO UPDATE
+            SET token_hash=EXCLUDED.token_hash,email_to=EXCLUDED.email_to,expires_at=EXCLUDED.expires_at`,
+        [WORKSPACE, tokenHash, email, expiresAt]);
+    }
+    async consumePasswordReset(tokenHash: string, nextHash: string): Promise<boolean> {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const { rows: [record] } = await client.query(`SELECT email_to FROM admin_password_resets
+                WHERE workspace_id=$1 AND token_hash=$2 AND expires_at>now() FOR UPDATE`, [WORKSPACE, tokenHash]);
+            if (!record) { await client.query('ROLLBACK'); return false; }
+            const recipient = await client.query(`SELECT 1 FROM companies WHERE workspace_id=$1
+                AND lower(email_to)=lower($2) LIMIT 1`, [WORKSPACE, record.email_to]);
+            if (recipient.rowCount !== 1) { await client.query('ROLLBACK'); return false; }
+            const changed = await client.query(`UPDATE admin_accounts SET password_hash=$1,must_change_password=false
+                WHERE username='admin'`, [nextHash]);
+            if (changed.rowCount !== 1) { await client.query('ROLLBACK'); return false; }
+            await client.query('DELETE FROM auth_sessions WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('UPDATE workspace_connections SET attempt=NULL WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('UPDATE managed_connections SET attempt=NULL WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('DELETE FROM admin_password_resets WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('COMMIT');
+            return true;
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
+    }
     async changeAdminPassword(previousHash: string, nextHash: string) {
         const client = await this.pool.connect();
         try {
@@ -484,6 +524,7 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
                 return false;
             }
             await client.query('DELETE FROM auth_sessions WHERE workspace_id=$1', [WORKSPACE]);
+            await client.query('DELETE FROM admin_password_resets WHERE workspace_id=$1', [WORKSPACE]);
             await client.query('UPDATE workspace_connections SET attempt=NULL WHERE workspace_id=$1', [WORKSPACE]);
             await client.query('UPDATE managed_connections SET attempt=NULL WHERE workspace_id=$1', [WORKSPACE]);
             await client.query('COMMIT');

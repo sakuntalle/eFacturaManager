@@ -1,13 +1,14 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { request as httpsRequest } from 'node:https';
 import { join } from 'node:path';
 import pg from 'pg';
+import { FIRST_LOGIN_HTTP_PORT, FIRST_LOGIN_HTTPS_PORT, FIRST_LOGIN_LIVE_ORIGIN,
+    FIRST_LOGIN_MOCK_ORIGIN, isolatedEnvironment } from './first-login-environment.mjs';
 
 const directory = '.local/first-login-demo';
 const stateFile = join(directory, 'state.json');
-const port = 3201;
-const origin = `http://localhost:${port}`;
 const prefix = 'efactura_first_login_';
 
 async function state() {
@@ -30,38 +31,36 @@ async function databaseAdmin() {
     return { source, client };
 }
 
-function isolatedEnvironment(source, databaseName) {
-    const database = new URL(source);
-    database.pathname = `/${databaseName}`;
-    return {
-        ...process.env,
-        DATABASE_URL: database.toString(),
-        ADMIN_BOOTSTRAP_DIR: join(directory, 'admin'),
-        ANAF_MODE: 'mock',
-        ANAF_CIF: '12345678',
-        ANAF_MOCK_URL: 'http://127.0.0.1:8790',
-        APP_PUBLIC_URL: origin,
-        APP_SESSION_SECRET: randomBytes(32).toString('hex'),
-        PORT: String(port),
-        APP_TLS_CERT_FILE: '',
-        APP_TLS_KEY_FILE: '',
-        EMAIL_ENABLED: 'false',
-        DATA_DIR: join(directory, 'data'),
-    };
-}
-
 async function healthy() {
     try {
-        const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1000) });
+        const response = await fetch(`${FIRST_LOGIN_MOCK_ORIGIN}/api/health`, { signal: AbortSignal.timeout(1000) });
         return response.ok;
     } catch {
         return false;
     }
 }
 
-async function start() {
+async function httpsHealthy(ca) {
+    return new Promise(resolve => {
+        const request = httpsRequest(`${FIRST_LOGIN_LIVE_ORIGIN}/api/health`, { ca }, response => {
+            response.resume();
+            resolve(response.statusCode === 200);
+        });
+        request.on('error', () => resolve(false));
+        request.setTimeout(1000, () => request.destroy());
+        request.end();
+    });
+}
+
+async function start(mode) {
     if (await state()) throw new Error('Test instance already exists. Run npm run first-login:stop before starting a fresh one.');
-    if (await healthy()) throw new Error(`Port ${port} is already serving an application.`);
+    if (await healthy()) throw new Error(`Port ${FIRST_LOGIN_HTTP_PORT} is already serving an application.`);
+    if (mode === 'live' && (!process.env.ANAF_CLIENT_ID || !process.env.ANAF_CLIENT_SECRET
+        || !process.env.ANAF_TOKEN_ENCRYPTION_KEY || !process.env.ANAF_CIF)) {
+        throw new Error('Live ANAF OAuth configuration is incomplete in the local .env file.');
+    }
+    const ca = mode === 'live' ? await readFile(join(execFileSync('mkcert', ['-CAROOT'],
+        { encoding: 'utf8' }).trim(), 'rootCA.pem')) : null;
     const { source, client } = await databaseAdmin();
     const databaseName = `${prefix}${randomBytes(6).toString('hex')}`;
     let child;
@@ -70,7 +69,7 @@ async function start() {
         await mkdir(directory, { recursive: true, mode: 0o700 });
         await client.query(`CREATE DATABASE ${databaseName}`);
         created = true;
-        const env = isolatedEnvironment(source, databaseName);
+        const env = isolatedEnvironment(source, databaseName, mode);
         const bootstrap = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/bootstrap-admin.mjs'],
             { env, encoding: 'utf8' });
         if (bootstrap.status !== 0) throw new Error('Administrator bootstrap failed.');
@@ -85,12 +84,13 @@ async function start() {
         }
         let ready = false;
         for (let attempt = 0; attempt < 100; attempt++) {
-            if (await healthy()) { ready = true; break; }
+            if (await healthy() && (mode === 'mock' || await httpsHealthy(ca))) { ready = true; break; }
             if (child.exitCode !== null) break;
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         if (!ready) throw new Error('Test instance did not become healthy.');
-        await writeFile(stateFile, JSON.stringify({ databaseName, pid: child.pid, port }, null, 4),
+        const origin = mode === 'live' ? FIRST_LOGIN_LIVE_ORIGIN : FIRST_LOGIN_MOCK_ORIGIN;
+        await writeFile(stateFile, JSON.stringify({ databaseName, pid: child.pid, mode, origin }, null, 4),
             { mode: 0o600, flag: 'wx' });
         console.log(`First-login test instance is ready at ${origin}`);
         console.log(`Username: admin. Read the temporary password in ${join(directory, 'admin', 'README.md')}`);
@@ -124,6 +124,7 @@ async function stop() {
 }
 
 const command = process.argv[2];
-if (command === 'start') await start();
+if (command === 'start') await start('live');
+else if (command === 'start-mock') await start('mock');
 else if (command === 'stop') await stop();
-else throw new Error('Use start or stop.');
+else throw new Error('Use start, start-mock or stop.');

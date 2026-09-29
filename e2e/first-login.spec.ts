@@ -48,7 +48,8 @@ test('fresh admin setup guides connection creation, entity linking and authoriza
         if (pathname === `/api/anaf/connections/${connectionId}/connect`) {
             expect(route.request().method()).toBe('POST');
             connected = true;
-            return route.fulfill({ status: 303, headers: { Location: '/?view=connections&anaf=connected' }, body: '' });
+            return route.fulfill({ status: 303, headers: {
+                Location: `/?view=connections&anaf=connected&connection=${connectionId}` }, body: '' });
         }
         if (pathname === '/api/invoices') return route.fulfill({ json: { items: [], total: 0, allTotal: 0, page: 1, pageSize: 50 } });
         return route.fulfill({ json: [] });

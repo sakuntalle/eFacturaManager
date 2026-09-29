@@ -155,9 +155,10 @@ test('admin adds an individual and switches between isolated entity inboxes', as
     await page.getByRole('button', { name: 'Delete this individual' }).click();
     await individualDialog.getByRole('button', { name: 'Delete individual' }).click();
     await expect(page.locator('.sidebar').getByRole('button', { name: /First company/ })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByRole('status')).toContainText('Test Person was deleted.');
-    await page.getByRole('status').getByRole('button', { name: 'Dismiss notification' }).click();
-    await expect(page.getByRole('status')).toHaveCount(0);
+    const deletionToast = page.locator('.toast').filter({ hasText: 'Test Person was deleted.' });
+    await expect(deletionToast).toBeVisible();
+    await deletionToast.getByRole('button', { name: 'Dismiss notification' }).click();
+    await expect(deletionToast).toHaveCount(0);
     await expect(page.locator('.entity-nav')).toHaveCount(2);
     await page.locator('.sidebar').getByRole('button', { name: /Second company/ }).click();
     await views.getByRole('button', { name: 'Settings' }).click();

@@ -19,7 +19,7 @@ await admin.connect();
 let repo;
 try {
     await admin.query(`CREATE DATABASE ${databaseName}`);
-    const environment = { ...process.env, DATABASE_URL: testUrl.toString(),
+    const environment = { ...process.env, DATABASE_URL: testUrl.toString(), APP_DATABASE_NAME: databaseName,
         ADMIN_BOOTSTRAP_DIR: join(directory, 'admin'), ANAF_MODE: 'mock', ANAF_CIF: '12345678' };
     const bootstrap = () => spawnSync(process.execPath, ['--import', 'tsx', 'scripts/bootstrap-admin.mjs'],
         { env: environment, encoding: 'utf8' });

@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { createServer } from 'node:https';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NestFactory } from '@nestjs/core';
@@ -14,18 +15,30 @@ import type { ConnectionFailure } from './connection-errors.js';
 import { Sessions, SESSION_COOKIE } from './sessions.js';
 import { ADMIN_USERNAME, passwordHash, verifyPassword } from './admin-auth.js';
 import { diagnosticReference, logFailure, logInfo } from './diagnostics.js';
+import { PasswordResets } from './password-reset.js';
+import { SmtpNotificationChannel } from './adapters/email.js';
 
 const app = await runtime().catch(error => { logFailure('web', 'startup', error); process.exit(1); });
 const bindingCookie = 'efactura_oauth';
 const bindingOptions = { httpOnly: true, secure: true, sameSite: 'lax' as const, path: '/callback' };
 const sessions = new Sessions(app.repo, app.cfg);
+const passwordResets = new PasswordResets(app.repo, new SmtpNotificationChannel(app.cfg), app.cfg.publicUrl);
 const attempts = new Map<string, { count: number; until: number }>();
+const resetAttempts = new Map<string, { count: number; until: number }>();
+function rateLimited(key: string, limit: number, duration: number): boolean {
+    const previous = resetAttempts.get(key);
+    const current = previous && previous.until > Date.now() ? previous : { count: 0, until: Date.now() + duration };
+    current.count++;
+    resetAttempts.set(key, current);
+    return current.count > limit;
+}
 function uuid(id: string) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new BadRequestException('Invalid identifier.');
     return id;
 }
 function operation(path: string): 'authentication' | 'connection' | 'companies' | 'invoices' | 'sync' | 'settings' | 'events' | 'mock' | 'other' {
-    if (['/api/login', '/api/logout', '/api/session', '/api/password'].includes(path)) return 'authentication';
+    if (['/api/login', '/api/logout', '/api/session', '/api/password'].includes(path)
+        || path.startsWith('/api/password-reset/')) return 'authentication';
     if (path.startsWith('/api/anaf/') || path.startsWith('/api/connections') || path === '/callback') return 'connection';
     if (path.startsWith('/api/companies')) return 'companies';
     if (path.startsWith('/api/invoices')) return 'invoices';
@@ -43,6 +56,32 @@ class ApiController {
         return app.scope(id);
     }
     @Get('health') health() { return { ok: true }; }
+    @Post('password-reset/request') requestPasswordReset(@Body() body: { email?: unknown }, @Req() req: Request) {
+        const email = typeof body?.email === 'string' ? body.email.trim() : '';
+        const emailKey = createHash('sha256').update(email.toLowerCase()).digest('hex');
+        const ipLimited = rateLimited(`ip:${req.ip ?? 'unknown'}`, 10, 60 * 60 * 1000);
+        const emailLimited = !ipLimited && rateLimited(`email:${emailKey}`, 3, 60 * 60 * 1000);
+        if (!ipLimited && !emailLimited) {
+            void passwordResets.request(email).catch(error => logFailure('web', 'password_reset_request', error,
+                { operation: 'authentication' }));
+        }
+        return { message: 'If this email address is registered, a password reset link will be sent.' };
+    }
+    @Post('password-reset/complete') async completePasswordReset(@Body() body: { token?: unknown; newPassword?: unknown },
+        @Req() req: Request, @Res() res: Response) {
+        if (rateLimited(`complete:${req.ip ?? 'unknown'}`, 20, 60 * 60 * 1000)) {
+            res.status(429).json({ message: 'Too many reset attempts. Try again later.' }); return;
+        }
+        if (typeof body?.newPassword !== 'string' || body.newPassword.length < 12 || body.newPassword.length > 128) {
+            res.status(400).json({ message: 'Choose a password with 12 to 128 characters.' }); return;
+        }
+        if (typeof body.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.token)) {
+            res.status(400).json({ message: 'This reset link is invalid or has expired.' }); return;
+        }
+        const completed = await passwordResets.complete(body.token, passwordHash(body.newPassword));
+        if (!completed) { res.status(400).json({ message: 'This reset link is invalid or has expired.' }); return; }
+        res.clearCookie(SESSION_COOKIE, sessions.cookieOptions()).json({ ok: true });
+    }
     @Post('login') async login(@Body() body: { username?: string; password?: string; rememberMe?: boolean }, @Req() req: Request, @Res() res: Response) {
         if (body?.rememberMe !== undefined && typeof body.rememberMe !== 'boolean') throw new BadRequestException('Remember me must be a boolean.');
         const key = req.ip ?? 'local';
@@ -249,16 +288,21 @@ server.use(async (req: Request, res: Response, next: NextFunction) => {
         res.status(303).setHeader('Location', `${app.cfg.publicUrl}/`).end(); return;
     }
     // Preserve Origin on same-origin form POSTs without sending referrers to ANAF.
-    res.setHeader('Referrer-Policy', 'same-origin');
+    if (req.method === 'GET' && req.path === '/'
+        && new URL(req.originalUrl, app.cfg.publicUrl).searchParams.has('reset')) {
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader('Cache-Control', 'no-store');
+    } else res.setHeader('Referrer-Policy', 'same-origin');
     if (req.path === '/callback') {
         res.setHeader('Referrer-Policy', 'no-referrer');
         res.setHeader('Cache-Control', 'no-store');
         let connected = false;
         let failure: ConnectionFailure = 'invalid_return';
+        let connectionId = DEFAULT_CONNECTION_ID;
         try {
             const cookie = req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith(`${bindingCookie}=`))?.slice(bindingCookie.length + 1) ?? '';
             const split = cookie.indexOf('.');
-            const connectionId = split < 0 ? DEFAULT_CONNECTION_ID : cookie.slice(0, split);
+            connectionId = split < 0 ? DEFAULT_CONNECTION_ID : cookie.slice(0, split);
             const binding = split < 0 ? cookie : cookie.slice(split + 1);
             if (req.method === 'GET' && /^[0-9a-f-]{36}$/i.test(connectionId)) {
                 connected = await (await app.connectionFor(connectionId)).complete(new URL(req.originalUrl, app.cfg.publicUrl), binding, (step, status) => {
@@ -268,7 +312,7 @@ server.use(async (req: Request, res: Response, next: NextFunction) => {
             }
         } catch (error) { failure = 'storage_or_processing'; logFailure('web', 'connection_return', error, { operation: 'connection' }); }
         res.clearCookie(bindingCookie, bindingOptions);
-        res.status(303).setHeader('Location', connected ? '/?view=connections&anaf=connected'
+        res.status(303).setHeader('Location', connected ? `/?view=connections&anaf=connected&connection=${connectionId}`
             : `/?view=connections&anaf=failed&reason=${failure}`).end();
         return;
     }
@@ -279,10 +323,12 @@ server.use(async (req: Request, res: Response, next: NextFunction) => {
         res.status(403).json({ message: 'Request origin does not match APP_PUBLIC_URL.' }); return;
     }
     try {
-        if (!['/api/login', '/api/health'].includes(req.path) && !await sessions.valid(req.headers.cookie)) {
+        if (!['/api/login', '/api/health', '/api/password-reset/request', '/api/password-reset/complete'].includes(req.path)
+            && !await sessions.valid(req.headers.cookie)) {
             res.status(401).json({ message: 'Please sign in.' }); return;
         }
-        if (!['/api/login', '/api/health', '/api/session', '/api/password', '/api/logout'].includes(req.path)
+        if (!['/api/login', '/api/health', '/api/session', '/api/password', '/api/logout',
+            '/api/password-reset/request', '/api/password-reset/complete'].includes(req.path)
             && (await app.repo.adminAccount())?.mustChangePassword) {
             res.status(403).json({ message: 'Change the administrator password before continuing.' }); return;
         }

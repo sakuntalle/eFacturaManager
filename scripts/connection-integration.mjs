@@ -28,7 +28,7 @@ const env = { ...process.env, ANAF_MODE: 'live', ANAF_ENV: 'test', ANAF_CIF: '99
     APP_TLS_KEY_FILE: '.local/tls/localhost-key.pem', ANAF_CLIENT_ID: 'integration-private-id',
     ANAF_CLIENT_SECRET: 'integration-private-secret', ANAF_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     ANAF_REDIRECT_URI: `${origin}/callback`, EMAIL_ENABLED: 'false',
-    DATABASE_URL: testUrl.toString() };
+    DATABASE_URL: testUrl.toString(), APP_DATABASE_NAME: databaseName };
 const cfg = config(env);
 const repo = new PostgresRepository(cfg);
 await repo.initialize();
@@ -175,7 +175,7 @@ try {
     assert.equal(secondStart.status, 303);
     const secondState = new URL(secondStart.headers.location).searchParams.get('state');
     const secondReturn = await request(`/callback?code=valid&state=${secondState}`, { cookie: cookie(secondStart) });
-    assert.equal(secondReturn.headers.location, '/?view=connections&anaf=connected');
+    assert.equal(secondReturn.headers.location, `/?view=connections&anaf=connected&connection=${secondConnectionId}`);
     assert.equal(JSON.parse((await request(`/api/status?companyId=${secondCompanyId}`, { cookie: session })).text).connection.state, 'connected');
     assert.equal((await request(`/api/sync?companyId=${secondCompanyId}`,
         { method: 'POST', cookie: session })).status, 201);
@@ -205,7 +205,7 @@ try {
     const start = await begin();
     assert.equal((await request(start.callback)).headers.location, '/?view=connections&anaf=failed&reason=invalid_return');
     const completed = await request(start.callback, { cookie: start.binding });
-    assert.equal(completed.headers.location, '/?view=connections&anaf=connected');
+    assert.equal(completed.headers.location, `/?view=connections&anaf=connected&connection=${DEFAULT_CONNECTION_ID}`);
     assert.equal(completed.headers['referrer-policy'], 'no-referrer');
     assert.equal((await request(start.callback, { cookie: start.binding })).headers.location, '/?view=connections&anaf=failed&reason=attempt_missing');
     let status = await request(`/api/status?companyId=${firstCompany.id}`, { cookie: session });

@@ -18,7 +18,8 @@ await admin.connect();
 let repo;
 try {
     await admin.query(`CREATE DATABASE ${databaseName}`);
-    const cfg = config({ ...process.env, DATABASE_URL: testUrl.toString(), DATA_DIR: directory,
+    const cfg = config({ ...process.env, DATABASE_URL: testUrl.toString(), APP_DATABASE_NAME: databaseName,
+        DATA_DIR: directory,
         ANAF_MODE: 'mock', ANAF_CIF: '12345678' });
     repo = new PostgresRepository(cfg);
     await repo.initialize();

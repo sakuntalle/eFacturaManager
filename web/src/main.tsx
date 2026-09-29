@@ -34,6 +34,7 @@ function connectionLabel(connection: ConnectionStatus) {
             : connection.state === 'mock' ? 'Simulated' : 'Disconnected';
 }
 const syncQueuedNotice = 'Synchronization queued. The worker will pick it up shortly.';
+const connectionSyncNotice = 'ANAF connected. Initial synchronization will start shortly.';
 function Toast({ message, onDismiss }: { message: string; onDismiss: () => void }) {
     return <div className="toast" role="status">
         <span>{message}</span>
@@ -153,6 +154,14 @@ function App() {
     const [authenticated, setAuthenticated] = useState<boolean | null>(null);
     const [username, setUsername] = useState('admin');
     const [password, setPassword] = useState('');
+    const [forgotOpen, setForgotOpen] = useState(false);
+    const [recoveryEmail, setRecoveryEmail] = useState('');
+    const [recoveryNotice, setRecoveryNotice] = useState('');
+    const [recoveryError, setRecoveryError] = useState('');
+    const [recoveryBusy, setRecoveryBusy] = useState(false);
+    const [resetToken, setResetToken] = useState(() => new URLSearchParams(location.search).get('reset') ?? '');
+    const [resetPassword, setResetPassword] = useState('');
+    const [confirmResetPassword, setConfirmResetPassword] = useState('');
     const [mustChangePassword, setMustChangePassword] = useState(false);
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
@@ -185,9 +194,10 @@ function App() {
     const [error, setError] = useState('');
     const [notice, setNotice] = useState(() => {
         const result = new URLSearchParams(location.search).get('anaf');
-        return result === 'connected' ? 'ANAF connected. Initial synchronization will start shortly.'
+        return result === 'connected' ? connectionSyncNotice
             : result === 'failed' ? connectionFailureMessage(new URLSearchParams(location.search).get('reason')) : '';
     });
+    const connectedConnectionId = useRef(new URLSearchParams(location.search).get('connection'));
     const [queuedSync, setQueuedSync] = useState<{ companyId: string; lastSync: string | null; nextSync: string } | null>(null);
     const [skipSetup, setSkipSetup] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -244,8 +254,9 @@ function App() {
     }
     useEffect(() => {
         const url = new URL(location.href);
-        if (url.searchParams.has('anaf') || url.searchParams.has('view')) {
+        if (url.searchParams.has('anaf') || url.searchParams.has('view') || url.searchParams.has('reset')) {
             url.searchParams.delete('anaf'); url.searchParams.delete('reason'); url.searchParams.delete('view');
+            url.searchParams.delete('connection'); url.searchParams.delete('reset');
             history.replaceState(null, '', url);
         }
     }, []);
@@ -275,6 +286,15 @@ function App() {
         }, 15000);
         return () => clearTimeout(timer);
     }, [queuedSync]);
+    useEffect(() => {
+        if (notice !== connectionSyncNotice || !connectedConnectionId.current || !status) return;
+        const managed = status.connections?.find(connection => connection.id === connectedConnectionId.current);
+        if (!managed?.entityIds.length) return;
+        if (managed.entityIds.every(id => {
+            const entity = status.companies.find(company => company.id === id);
+            return entity?.initialized && entity.lastSync !== null;
+        })) setNotice('');
+    }, [notice, status]);
     function sortInvoices(by: InvoiceSort) {
         const next = { by, direction: invoiceSort.by === by && invoiceSort.direction === 'desc' ? 'asc' : 'desc' } as const;
         activeInvoiceSort.current = next;
@@ -300,7 +320,55 @@ function App() {
         finally { setBusy(false); }
     }
     if (authenticated === null && !error) return <div className="loading">Opening your invoice workspace…</div>;
+    if (resetToken) return <main className="login-shell">
+        <div className="brand"><span className="brand-icon">eF</span> eFactura <span>Manager</span></div>
+        <form className="login-card" onSubmit={event => { event.preventDefault();
+            if (resetPassword !== confirmResetPassword) {
+                setRecoveryError('The new passwords do not match.'); return;
+            }
+            setRecoveryBusy(true); setRecoveryError('');
+            void api<{ ok: boolean }>('password-reset/complete', { token: resetToken, newPassword: resetPassword })
+                .then(() => {
+                    setResetToken(''); setResetPassword(''); setConfirmResetPassword('');
+                    setAuthenticated(false); setForgotOpen(false);
+                    setRecoveryNotice('Password changed. Sign in with your new password.');
+                })
+                .catch(error => setRecoveryError(error instanceof Error ? error.message : 'Could not reset the password.'))
+                .finally(() => setRecoveryBusy(false));
+        }}>
+            <span className="eyebrow">ACCOUNT RECOVERY</span><h1>Choose a new password</h1>
+            <p>This link can be used once and expires after 30 minutes.</p>
+            <label>New password<input type="password" autoComplete="new-password" required minLength={12} maxLength={128}
+                value={resetPassword} onChange={event => setResetPassword(event.target.value)} /></label>
+            <label>Confirm new password<input type="password" autoComplete="new-password" required
+                value={confirmResetPassword} onChange={event => setConfirmResetPassword(event.target.value)} /></label>
+            {recoveryError && <p className="alert error" role="alert">{recoveryError}</p>}
+            <button className="primary" disabled={recoveryBusy}>Change password</button>
+        </form>
+    </main>;
+    if (!authenticated && forgotOpen) return <main className="login-shell">
+        {recoveryNotice && <div className="toast-stack"><Toast message={recoveryNotice}
+            onDismiss={() => setRecoveryNotice('')} /></div>}
+        <div className="brand"><span className="brand-icon">eF</span> eFactura <span>Manager</span></div>
+        <form className="login-card" onSubmit={event => { event.preventDefault();
+            setRecoveryBusy(true); setRecoveryError('');
+            void api<{ message: string }>('password-reset/request', { email: recoveryEmail })
+                .then(result => setRecoveryNotice(result.message))
+                .catch(() => setRecoveryNotice('If this email address is registered, a password reset link will be sent.'))
+                .finally(() => setRecoveryBusy(false));
+        }}>
+            <span className="eyebrow">ACCOUNT RECOVERY</span><h1>Forgot password?</h1>
+            <p>Enter an email address configured for one of your managed entities. If it matches, we’ll send a reset link there.</p>
+            <label>Email address<input type="email" autoComplete="email" required maxLength={254}
+                value={recoveryEmail} onChange={event => setRecoveryEmail(event.target.value)} /></label>
+            <button className="primary recovery-submit" disabled={recoveryBusy}>Send reset link</button>
+            <button type="button" className="login-link" onClick={() => { setForgotOpen(false); setRecoveryNotice('');
+                setRecoveryError(''); }}>Back to sign in</button>
+        </form>
+    </main>;
     if (!authenticated) return <main className="login-shell">
+        {recoveryNotice && <div className="toast-stack"><Toast message={recoveryNotice}
+            onDismiss={() => setRecoveryNotice('')} /></div>}
         <div className="brand"><span className="brand-icon">eF</span> eFactura <span>Manager</span></div>
         <form className="login-card" onSubmit={e => { e.preventDefault(); void action(async () => {
             const admin = await api<AdminSession>('login', { username, password, rememberMe });
@@ -314,6 +382,8 @@ function App() {
             <p id="remember-me-help" className="muted">Stay signed in for 30 days on this browser.</p>
             {error && <p className="error" role="alert">{error}</p>}
             <button className="primary" disabled={busy}>Sign in →</button>
+            <button type="button" className="login-link" onClick={() => { setForgotOpen(true); setRecoveryNotice('');
+                setError(''); }}>Forgot password?</button>
         </form><p className="login-foot">Self-hosted. Your invoices stay in your workspace.</p>
     </main>;
     if (mustChangePassword) return <main className="login-shell">

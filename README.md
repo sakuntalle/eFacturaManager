@@ -21,14 +21,30 @@ This explicitly uses the supplied local development configuration, avoiding any 
 
 The bootstrap command creates the one administrator account in PostgreSQL and writes its initial password to the local, Git-ignored README with owner-only file permissions. It generates the password once for a new database; rerunning the command leaves an existing account unchanged. The first login requires a password change before any workspace page or API can be used. After that change, the app opens **Manage ANAF connections**. A fresh workspace has no entities or connections: create a connection, add a company or individual linked to it, then authorize it in live mode. Existing installations retain their entities and connections. Use the same bootstrap command with your local `.env` when upgrading an existing installation. Never copy the local password README into a public repository.
 
-To try the first-login screen again without changing your existing administrator or data, start a separate local instance from the current build:
+### Switch the active database
+
+The Docker web app and worker use the same `APP_DATABASE_NAME` from `.env`; the default is `efactura`. To create a separate, persistent workspace for first-login and live ANAF testing without changing the registered `https://localhost:8765/callback` URL:
+
+```sh
+npm run db:create -- efactura_onboarding
+```
+
+The command creates and initializes the named database on the local PostgreSQL server and writes its one-time administrator password to `.local/admin/efactura_onboarding/README.md`. It refuses to overwrite an existing database. Change `APP_DATABASE_NAME=efactura_onboarding` in `.env`, then apply the selection to both services:
+
+```sh
+docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --no-deps --force-recreate web worker
+```
+
+Open the normal <https://localhost:8765> site and sign in with the new database's administrator password. The frontend, URL, ANAF callback and PostgreSQL volume stay the same; accounts, entities, invoices, sessions and saved ANAF connections belong to the selected database. To return to the original workspace, set `APP_DATABASE_NAME=efactura` and run the same Compose command. Neither switch deletes a database. For native development, `APP_DATABASE_NAME` selects the database in `DATABASE_URL` as well. Keep only one web/worker pair active for a selected database.
+
+An alternative isolated first-login site can run from the current build on port 9878:
 
 ```sh
 npm run build
 npm run first-login:start
 ```
 
-Open <http://localhost:3201>, sign in as `admin`, and read the generated temporary password in `.local/first-login-demo/admin/README.md`. This test instance starts with no managed entities or ANAF connections. It uses its own temporary PostgreSQL database, mock ANAF mode and disabled email delivery. It does not start a worker. When finished, run `npm run first-login:stop` to stop the test site and remove only its temporary database. Run `npm run first-login:start` again to repeat the flow with a fresh account.
+Open <https://localhost:9878>, sign in as `admin`, and read the generated temporary password in `.local/first-login-demo/admin/README.md`. This test instance starts with no managed entities or ANAF connections. It uses its own temporary PostgreSQL database, live ANAF mode and disabled email delivery. It does not start a worker, so it will not collect invoices automatically. To complete a real ANAF authorization, add `https://localhost:9878/callback` as another callback URL for your ANAF OAuth application; the normal app's `https://localhost:8765/callback` registration remains in place. When finished, run `npm run first-login:stop` to stop the test site and remove only its temporary database. Run `npm run first-login:start` again to repeat the flow with a fresh account. For a mock-only first-login test instead, use `npm run first-login:start:mock`, which opens <http://localhost:3201> and reports simulated ANAF access.
 
 Check **Remember me** at sign-in to stay signed in for 30 days on that browser. Unchecked, the cookie lasts for the browser session and access expires after eight hours. Sessions persist across application restarts. Signing out revokes that session; changing the administrator password revokes all existing sessions. Some browsers restore session cookies when restoring a previous browsing session.
 
@@ -79,6 +95,12 @@ EMAIL_TO=your-destination-address@example.com
 
 Use the Gmail account as both `SMTP_USER` and the address in `EMAIL_FROM`; `EMAIL_TO` can be a different mailbox. The app password is separate from your Google account password. If Google does not offer app passwords for this account, use another SMTP provider rather than putting your normal password in `.env`.
 
+### Recover the administrator password
+
+Use **Forgot password?** on the sign-in page and enter an email address saved as the notification recipient for any managed company or individual. The application gives the same response for matching and non-matching addresses. It sends a reset link only to the matching address stored in PostgreSQL, using the deployment SMTP settings. `EMAIL_TO` in `.env` alone does not qualify until it is saved on a managed entity. The link expires after 30 minutes and works once; changing the password revokes all existing sessions and pending reset links. The reset email is independent of the entity's **Send invoice emails** setting.
+
+Anyone who controls any managed entity's notification mailbox can reset the single global administrator account and access every entity. Configure those recipient addresses accordingly. The link uses `APP_PUBLIC_URL`, so a localhost URL only opens from the host machine. If the database has no managed entities yet, use the initial administrator password in that database's local README.
+
 After saving `.env`, run `npm run email:test` from the project directory. It sends one clearly labeled test message to `EMAIL_TO` using the same SMTP settings as invoice notifications. It prints only a generic success or failure and never prints the mailbox addresses or password. Then restart both the web and worker services as shown below so automatic notifications use the new settings.
 
 Apply the configuration to the running HTTPS deployment (the worker sends the emails):
@@ -125,6 +147,7 @@ docker compose --env-file .env.example up -d database
 DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
 docker compose --env-file .env.example up --build -d
 npm run test:admin
+npm run test:reset
 npm run test:entities
 npm run test:connection
 npm run test:browser

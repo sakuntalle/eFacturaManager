@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { selectedDatabaseUrl } from './database-selection.js';
 
 export type AnafMode = 'mock' | 'live';
 export function config(env: NodeJS.ProcessEnv = process.env) {
@@ -21,7 +22,8 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
     }
     return {
         mode: mode as AnafMode, environment: environment as 'prod' | 'test', cif,
-        databaseUrl: env.DATABASE_URL ?? 'postgres://efactura:local-development@127.0.0.1:55432/efactura',
+        databaseUrl: selectedDatabaseUrl(env.DATABASE_URL ?? 'postgres://efactura:local-development@127.0.0.1:55432/efactura',
+            env.APP_DATABASE_NAME),
         publicUrl: publicUrl.origin, sessionSecret,
         port: Number(env.PORT ?? 3100),
         dataDir: resolve(env.DATA_DIR ?? '.local/app'),

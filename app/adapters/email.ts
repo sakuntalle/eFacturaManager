@@ -32,4 +32,19 @@ export class SmtpNotificationChannel implements NotificationChannel {
             throw new Error('SMTP delivery failed. Check provider settings and recipient; delivery will retry.');
         }
     }
+    async sendPasswordReset(to: string, link: string) {
+        try {
+            const info = await this.transport.sendMail({
+                from: this.cfg.smtp.from, to,
+                subject: 'Reset your eFactura Manager administrator password',
+                text: `A password reset was requested for your eFactura Manager administrator account.\n\n`
+                    + `Open this link within 30 minutes to choose a new password:\n${link}\n\n`
+                    + 'If you did not request this, you can ignore this email.\n',
+            });
+            if (!info.accepted?.length || info.rejected?.length) throw new Error('Recipient rejected.');
+        } catch (error) {
+            logFailure('email', 'password_reset_send', error);
+            throw new Error('Password reset email delivery failed.');
+        }
+    }
 }

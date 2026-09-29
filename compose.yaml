@@ -10,6 +10,7 @@ x-app-environment: &app-environment
     ANAF_REDIRECT_URI: ${ANAF_REDIRECT_URI:-https://localhost:8765/callback}
     ANAF_TOKEN_ENCRYPTION_KEY: ${ANAF_TOKEN_ENCRYPTION_KEY:-}
     DATABASE_URL: postgres://efactura:${POSTGRES_PASSWORD:-local-development}@database:5432/efactura
+    APP_DATABASE_NAME: ${APP_DATABASE_NAME:-efactura}
     DATA_DIR: /app/data
     APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3100}
     APP_SESSION_SECRET: ${APP_SESSION_SECRET:-local-development-session-secret-change-before-hosting}

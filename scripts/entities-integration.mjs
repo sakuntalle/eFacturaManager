@@ -30,6 +30,7 @@ try {
             [WORKSPACE_ID, 'mock', process.env.ANAF_ENV ?? 'prod', legacyConnection]);
     } finally { await legacy.end(); }
     process.env.DATABASE_URL = testUrl.toString();
+    process.env.APP_DATABASE_NAME = databaseName;
     process.env.ANAF_MODE = 'mock';
     process.env.ANAF_CIF = '12345678';
     app = await runtime();
