@@ -17,6 +17,7 @@ import { ADMIN_USERNAME, passwordHash, verifyPassword } from './admin-auth.js';
 import { diagnosticReference, logFailure, logInfo } from './diagnostics.js';
 import { PasswordResets } from './password-reset.js';
 import { SmtpNotificationChannel } from './adapters/email.js';
+import { bulkInvoiceIds, createInvoiceBundle } from './invoice-bundle.js';
 
 const app = await runtime().catch(error => { logFailure('web', 'startup', error); process.exit(1); });
 const bindingCookie = 'efactura_oauth';
@@ -213,10 +214,33 @@ class ApiController {
         return (await this.selected(companyId)).repo.invoicePage(typeof search === 'string' ? search.slice(0, 100) : '',
             sortBy ?? 'added', direction ?? 'desc', page === undefined ? 1 : Number(page), 50);
     }
+    @Get('invoices/selection') async invoiceSelection(@Query('search') search?: string,
+        @Query('companyId') companyId?: string) {
+        const invoices = await (await this.selected(companyId)).repo.invoices(typeof search === 'string' ? search.slice(0, 100) : '');
+        return { items: invoices.map(invoice => ({ id: invoice.id, pdfReady: invoice.pdfReady })) };
+    }
     @Get('invoices/:id') async invoice(@Param('id') id: string, @Query('companyId') companyId?: string) {
         const invoice = await (await this.selected(companyId)).repo.invoice(uuid(id));
         if (!invoice) throw new NotFoundException();
         return invoice;
+    }
+    @Post('invoices/bulk/:kind') async bulkDownload(@Param('kind') kind: string,
+        @Body() body: { invoiceIds?: unknown }, @Query('companyId') companyId: string | undefined, @Res() res: Response) {
+        if (kind !== 'zip' && kind !== 'pdf') throw new NotFoundException();
+        let ids: string[];
+        try { ids = bulkInvoiceIds(body?.invoiceIds).map(uuid); }
+        catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid invoice selection.'); }
+        const item = await this.selected(companyId);
+        const invoices = await Promise.all(ids.map(id => item.repo.invoice(id)));
+        if (invoices.some(invoice => !invoice)) throw new BadRequestException('Some selected invoices are unavailable.');
+        if (kind === 'pdf' && invoices.some(invoice => !invoice!.pdfReady)) {
+            throw new BadRequestException('A selected PDF is still being prepared.');
+        }
+        const bytes = await createInvoiceBundle(invoices.map(invoice => invoice!), kind,
+            (messageId, documentKind) => item.files.read(messageId, documentKind));
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="invoice-${kind === 'zip' ? 'zips' : 'pdfs'}.zip"`);
+        res.send(Buffer.from(bytes));
     }
     @Get('invoices/:id/:kind') async download(@Param('id') id: string, @Param('kind') kind: string,
         @Query('companyId') companyId: string | undefined, @Res() res: Response) {

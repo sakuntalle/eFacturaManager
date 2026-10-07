@@ -52,7 +52,7 @@ After adding a connection and a managed entity in mock mode, the first sync impo
 
 This is a local-first development version. Published ports bind to loopback. Default database credentials and session secret are local development values; replace them before hosting elsewhere. One administrator manages multiple companies and individuals in one workspace. Each entity has its own invoice archive, polling schedule, notification address and job history. Viewer accounts are not implemented.
 
-The **Dark mode** switch stays in the top-right corner while scrolling and is also available on the sign-in page. The invoice form inherits the main UI theme without its own switch. The initial theme follows your system preference; your selection is saved in this browser.
+The **Dark mode** switch is anchored in the top-right header on every page, including sign-in and account recovery. The invoice form inherits the main UI theme without its own switch. The initial theme follows your system preference; your selection is saved in this browser.
 
 The sidebar always shows **Managed companies** and **Managed individuals**. Select an entity, then use the **Invoices**, **Activity** and **Settings** tabs above the main view. **Manage ANAF connections** lists authorizations, their status and linked entities; it can create another connection and open the entity form with that connection selected. **Add managed entity** opens the Company (CIF/CUI) or Individual (CNP) creation form, where the ANAF connection is selected. An entity’s connection can also be changed in its Settings. The **Mocked ANAF** tab appears only when `ANAF_MODE=mock` and groups simulator controls and recent notification statuses. The bottom-left profile identifies the administrator.
 
@@ -198,6 +198,8 @@ See [live HTTPS setup](docs/live-connection.md). The retained [diagnostic CLI](d
 The integrated flow is tested against simulated OAuth responses over real local HTTPS and PostgreSQL. The qualified-certificate round trip and real invoice/PDF responses still need validation with ANAF. ANAF message listing is currently non-paginated and is not a complete archival/backfill implementation. The stored invoice inbox is paginated at 50 invoices per page.
 
 The inbox defaults to sorting by ANAF Added date and time, newest first; both Added date and Issue date headings can reverse the order. Dates display as `DD/MM/YYYY`, and Added date includes the ANAF time as `HH:mm`. On upgrade, the worker revisits the available 60-day ANAF message list once per entity to fill time on previously collected invoices. If ANAF no longer lists an older message, the stored date remains visible with "time unavailable" rather than inventing a time.
+
+Invoice rows can be selected individually or across all pages with **Select all**. The selected original ZIPs can be downloaded inside one ZIP archive; selected generated PDFs can be downloaded the same way once every selected PDF is ready. There is no application-level document-count limit on a bundle.
 
 ## Data and operations
 

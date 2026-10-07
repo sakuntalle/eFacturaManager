@@ -15,9 +15,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return <ThemeContext.Provider value={{ theme, toggle }}>{children}</ThemeContext.Provider>;
 }
 
-export function ThemeSwitch({ floating = false }: { floating?: boolean }) {
+export function ThemeSwitch() {
     const { theme, toggle } = useContext(ThemeContext);
-    return <button type="button" className={`theme-switch${floating ? ' floating-theme' : ''}`} role="switch"
+    return <button type="button" className="theme-switch" role="switch"
         aria-label="Dark mode" aria-checked={theme === 'dark'} onClick={toggle}>
         <span>Dark mode</span><span className="theme-track" aria-hidden="true"><span /></span>
     </button>;

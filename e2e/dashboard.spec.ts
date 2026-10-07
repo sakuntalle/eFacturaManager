@@ -93,6 +93,57 @@ test('administrator can browse invoices, inspect details, change polling and use
     expect(errors).toEqual([]);
 });
 
+test('table columns can be resized and retain their widths across reloads', async ({ page }) => {
+    await workspace(page, 'live');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+
+    const supplierHeader = page.getByRole('columnheader', { name: 'Supplier / invoice' });
+    const supplierHandle = page.getByRole('separator', { name: 'Resize Supplier / invoice column' });
+    const initialWidth = (await supplierHeader.boundingBox())!.width;
+    const issueWidth = (await page.getByRole('columnheader', { name: /Issue date/ }).boundingBox())!.width;
+    const initialTableLayout = await page.locator('#invoice-table-scroll').evaluate(element => ({
+        viewport: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        table: element.querySelector('table')!.getBoundingClientRect().width,
+    }));
+    expect(Math.abs(initialTableLayout.table - initialTableLayout.viewport)).toBeLessThanOrEqual(1);
+    expect(initialTableLayout.scrollWidth - initialTableLayout.viewport).toBeLessThanOrEqual(1);
+    expect(initialWidth).toBeGreaterThan(issueWidth * 2);
+    const handleBounds = (await supplierHandle.boundingBox())!;
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2, handleBounds.y + handleBounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBounds.x + handleBounds.width / 2 + 80, handleBounds.y + handleBounds.height / 2);
+    await page.mouse.up();
+    const resizedWidth = (await supplierHeader.boundingBox())!.width;
+    expect(resizedWidth).toBeGreaterThan(initialWidth + 60);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('efactura-manager:table-widths:invoices')))
+        .toContain('supplier');
+
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Your invoice inbox' })).toBeVisible();
+    expect(Math.abs((await supplierHeader.boundingBox())!.width - resizedWidth)).toBeLessThanOrEqual(1);
+    await supplierHandle.dblclick();
+    await expect.poll(async () => (await supplierHeader.boundingBox())!.width).toBeCloseTo(initialWidth, 0);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('efactura-manager:table-widths:invoices')))
+        .not.toContain('supplier');
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Your invoice inbox' })).toBeVisible();
+    expect(Math.abs((await supplierHeader.boundingBox())!.width - initialWidth)).toBeLessThanOrEqual(1);
+    await expect(page.getByRole('separator', { name: /^Resize .* column$/ })).toHaveCount(5);
+
+    await page.locator('.invoice-link').first().click();
+    await expect(page.locator('.details').getByRole('separator', { name: /^Resize .* column$/ })).toHaveCount(3);
+    await page.getByRole('button', { name: 'Close invoice details' }).click();
+    await page.getByRole('navigation', { name: 'Entity views' }).getByRole('button', { name: 'Activity' }).click();
+    await expect(page.getByRole('separator', { name: /^Resize .* column$/ })).toHaveCount(4);
+    await page.getByRole('button', { name: /Manage ANAF connections/ }).click();
+    await expect(page.getByRole('separator', { name: /^Resize .* column$/ })).toHaveCount(4);
+
+    await expect.poll(() => page.evaluate(() => ['invoices', 'invoice-lines', 'activity', 'connections'].every(table =>
+        localStorage.getItem(`efactura-manager:table-widths:${table}`) !== null))).toBe(true);
+});
+
 test('simulated invoice form supports cancellation, validation and custom invoice creation', async ({ page }, info) => {
     const state = await workspace(page, 'mock');
     await page.goto('/');

@@ -31,6 +31,11 @@ test('dark mode persists, stays accessible in the main UI and is inherited by th
     await page.goto('/');
     const theme = page.getByRole('switch', { name: 'Dark mode' });
     await expect(page.getByRole('button', { name: /Sign in/ })).toBeVisible();
+    await expect(page.locator('.standalone-topbar').getByRole('switch', { name: 'Dark mode' })).toBeVisible();
+    await page.getByRole('button', { name: 'Forgot password?' }).click();
+    await expect(page.getByRole('heading', { name: 'Forgot password?' })).toBeVisible();
+    await expect(page.locator('.standalone-topbar').getByRole('switch', { name: 'Dark mode' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to sign in' }).click();
     await expect(theme).toBeInViewport();
     await expect(theme).not.toBeChecked();
     await theme.click();
@@ -42,6 +47,7 @@ test('dark mode persists, stays accessible in the main UI and is inherited by th
     await page.reload();
     await expect(theme).toBeChecked();
     await expect(page.getByRole('heading', { name: 'Your invoice inbox' })).toBeVisible();
+    await expect(page.locator('.topbar').getByRole('switch', { name: 'Dark mode' })).toBeVisible();
     await page.getByRole('button', { name: /Mocked ANAF/ }).click();
     await page.screenshot({ path: info.outputPath('dark-mock.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });

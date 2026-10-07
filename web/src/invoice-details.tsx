@@ -1,6 +1,13 @@
 import { useEffect, useRef } from 'react';
 import type { Invoice } from '../../app/contracts.js';
 import { formatAddedDate, formatInvoiceDate } from './invoice-date.js';
+import { ResizableHeader, ResizableTable } from './resizable-table.js';
+
+const lineColumns = [
+    { id: 'description', label: 'Description', defaultWidth: 320, minWidth: 120, maxAutoWidth: 320 },
+    { id: 'quantity', label: 'Quantity', defaultWidth: 120 },
+    { id: 'net', label: 'Net amount', defaultWidth: 160 },
+];
 
 export function InvoiceDetails({ invoice, companyId, onClose }: { invoice: Invoice; companyId: string; onClose: () => void }) {
     const panel = useRef<HTMLElement>(null);
@@ -31,9 +38,12 @@ export function InvoiceDetails({ invoice, companyId, onClose }: { invoice: Invoi
                 <div><span>Due date</span><b>{invoice.dueDate ? formatInvoiceDate(invoice.dueDate) : 'Not specified'}</b></div>
                 <div><span>ANAF message</span><b>{invoice.messageId}</b></div>
             </div>
-            <div className="table-scroll"><table><thead><tr><th>Description</th><th>Quantity</th><th>Net amount</th></tr></thead>
+            <div className="table-scroll"><ResizableTable tableId="invoice-lines" columns={lineColumns}><thead><tr>
+                <ResizableHeader columnId="description">Description</ResizableHeader>
+                <ResizableHeader columnId="quantity">Quantity</ResizableHeader>
+                <ResizableHeader columnId="net">Net amount</ResizableHeader></tr></thead>
                 <tbody>{invoice.lines.map((line, index) => <tr key={index}><td>{line.description}</td><td>{line.quantity}</td><td>{line.amount} {invoice.currency}</td></tr>)}</tbody>
-            </table></div>
+            </ResizableTable></div>
         </div>
         <div className="details-summary">
             <div className="totals"><span>Net {invoice.net} {invoice.currency}</span><span>VAT {invoice.tax} {invoice.currency}</span><b>Invoice amount {invoice.total} {invoice.currency}</b></div>

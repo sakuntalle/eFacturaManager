@@ -7,12 +7,25 @@ import { InvoiceDetails } from './invoice-details.js';
 import { formatAddedDate, formatAppDateTime, formatInvoiceDate } from './invoice-date.js';
 import type { ConnectionStatus } from '../../app/contracts.js';
 import { connectionFailureMessage } from '../../app/connection-errors.js';
+import { ResizableHeader, ResizableTable } from './resizable-table.js';
 import './style.css';
 
 type Status = { company: Company | null; companies: Company[]; mode: 'mock' | 'live'; emailEnabled: boolean; emailTo: string;
     diagnosticRef: string | null; connection: ConnectionStatus; connections?: ManagedConnection[] };
 type AdminSession = { username: string; mustChangePassword: boolean };
 type View = { tab: string; companyId: string; addConnectionId: string };
+const connectionColumns = [
+    { id: 'connection', label: 'Connection', defaultWidth: 220, minWidth: 120 },
+    { id: 'status', label: 'Status', defaultWidth: 140 },
+    { id: 'entities', label: 'Linked entities', defaultWidth: 240, minWidth: 120, maxAutoWidth: 320 },
+    { id: 'actions', label: 'Actions', defaultWidth: 360, minWidth: 160, maxAutoWidth: 480 },
+];
+const activityColumns = [
+    { id: 'task', label: 'Task', defaultWidth: 220, minWidth: 120 },
+    { id: 'status', label: 'Status', defaultWidth: 140 },
+    { id: 'attempts', label: 'Failed attempts', defaultWidth: 160 },
+    { id: 'details', label: 'Details', defaultWidth: 300, minWidth: 120, maxAutoWidth: 400 },
+];
 async function api<T>(path: string, body?: unknown, companyId?: string, method?: 'DELETE'): Promise<T> {
     const url = new URL(`/api/${path}`, location.origin);
     if (companyId) url.searchParams.set('companyId', companyId);
@@ -40,6 +53,80 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
         <span>{message}</span>
         <button type="button" aria-label="Dismiss notification" onClick={onDismiss}>×</button>
     </div>;
+}
+function StandaloneThemeHeader() {
+    return <header className="standalone-topbar"><ThemeSwitch /></header>;
+}
+type ScrollbarGeometry = { visible: boolean; left: number; width: number; contentWidth: number; maximum: number; value: number };
+function ViewportHorizontalScrollbar({ targetRef }: { targetRef: React.RefObject<HTMLDivElement | null> }) {
+    const scrollbar = useRef<HTMLDivElement>(null);
+    const [geometry, setGeometry] = useState<ScrollbarGeometry>({
+        visible: false, left: 0, width: 0, contentWidth: 0, maximum: 0, value: 0,
+    });
+    useEffect(() => {
+        const target = targetRef.current;
+        if (!target) return;
+        function measure() {
+            const bounds = target!.getBoundingClientRect();
+            const left = Math.max(0, bounds.left);
+            const right = Math.min(window.innerWidth, bounds.right);
+            const maximum = Math.max(0, target!.scrollWidth - target!.clientWidth);
+            setGeometry({
+                visible: maximum > 1 && bounds.top < window.innerHeight - 16
+                    && bounds.bottom > window.innerHeight,
+                left,
+                width: Math.max(0, right - left),
+                contentWidth: target!.scrollWidth,
+                maximum,
+                value: target!.scrollLeft,
+            });
+            if (scrollbar.current && scrollbar.current.scrollLeft !== target!.scrollLeft) {
+                scrollbar.current.scrollLeft = target!.scrollLeft;
+            }
+        }
+        const observer = new ResizeObserver(measure);
+        observer.observe(target);
+        if (target.firstElementChild) observer.observe(target.firstElementChild);
+        target.addEventListener('scroll', measure, { passive: true });
+        window.addEventListener('scroll', measure, { passive: true });
+        window.addEventListener('resize', measure, { passive: true });
+        measure();
+        return () => {
+            observer.disconnect();
+            target.removeEventListener('scroll', measure);
+            window.removeEventListener('scroll', measure);
+            window.removeEventListener('resize', measure);
+        };
+    }, [targetRef]);
+    return <div ref={scrollbar} className="invoice-viewport-scrollbar" role="scrollbar" aria-label="Invoice table horizontal scroll"
+        aria-controls="invoice-table-scroll" aria-orientation="horizontal" aria-valuemin={0} aria-valuemax={Math.round(geometry.maximum)}
+        aria-valuenow={Math.round(geometry.value)} tabIndex={geometry.visible ? 0 : -1}
+        style={{ display: geometry.visible ? 'block' : 'none', left: geometry.left, width: geometry.width }}
+        onWheel={event => {
+            const movement = event.deltaX || (event.shiftKey ? event.deltaY : 0);
+            if (!movement) return;
+            event.preventDefault();
+            event.currentTarget.scrollLeft += movement;
+            if (targetRef.current) targetRef.current.scrollLeft = event.currentTarget.scrollLeft;
+        }}
+        onKeyDown={event => {
+            const movements: Partial<Record<React.KeyboardEvent['key'], number>> = {
+                ArrowLeft: -40, ArrowRight: 40, PageUp: -event.currentTarget.clientWidth * .8,
+                PageDown: event.currentTarget.clientWidth * .8, Home: -geometry.maximum, End: geometry.maximum,
+            };
+            const movement = movements[event.key];
+            if (movement === undefined) return;
+            event.preventDefault();
+            event.currentTarget.scrollLeft += movement;
+            if (targetRef.current) targetRef.current.scrollLeft = event.currentTarget.scrollLeft;
+        }}
+        onScroll={event => {
+            const target = targetRef.current;
+            const value = event.currentTarget.scrollLeft;
+            if (!target || target.scrollLeft === value) return;
+            target.scrollLeft = value;
+            setGeometry(current => ({ ...current, value }));
+        }}><div style={{ width: geometry.contentWidth }} /></div>;
 }
 type EntityDraft = { name: string; kind: 'company' | 'individual'; cif: string; emailTo: string;
     emailEnabled: boolean; pollSeconds: number; connectionId: string };
@@ -182,6 +269,11 @@ function App() {
     const activeInvoiceSort = useRef(invoiceSort);
     const [events, setEvents] = useState<Event[]>([]);
     const [selectedId, setSelectedId] = useState(new URLSearchParams(location.search).get('invoice'));
+    const [selectedInvoices, setSelectedInvoices] = useState<Map<string, boolean>>(() => new Map());
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectionBusy, setSelectionBusy] = useState(false);
+    const [bulkDownloading, setBulkDownloading] = useState<'zip' | 'pdf' | null>(null);
+    const invoiceTableScroll = useRef<HTMLDivElement>(null);
     const [tab, setTab] = useState(new URLSearchParams(location.search).get('view') === 'connections' ? 'connections' : 'inbox');
     const [connectionName, setConnectionName] = useState('');
     const [creatingConnection, setCreatingConnection] = useState(false);
@@ -229,6 +321,11 @@ function App() {
                 || activeInvoiceSort.current.by !== invoiceSort.by || activeInvoiceSort.current.direction !== invoiceSort.direction
                 || activePage.current !== page || activeSearchTerm.current !== searchTerm) return;
             setStatus(next); setInvoices(result.items); setInvoiceTotal(result.allTotal); setMatchingTotal(result.total);
+            setSelectedInvoices(current => {
+                const updated = new Map(current);
+                for (const invoice of result.items) if (updated.has(invoice.id)) updated.set(invoice.id, invoice.pdfReady);
+                return updated;
+            });
             setEvents(jobs); setAuthenticated(true); setLoadingCompanyId(null);
             if (!activeCompanyId.current) {
                 activeCompanyId.current = next.company.id;
@@ -265,7 +362,7 @@ function App() {
         const timer = setTimeout(() => {
             activeSearchTerm.current = search;
             activePage.current = 1;
-            setPage(1); setSearchTerm(search); setSelectedId(null);
+            setPage(1); setSearchTerm(search); setSelectedId(null); setSelectedInvoices(new Map()); setSelectionMode(false);
         }, 250);
         return () => clearTimeout(timer);
     }, [search]);
@@ -305,6 +402,55 @@ function App() {
         activePage.current = next;
         setPage(next); setSelectedId(null);
     }
+    function selectInvoice(invoice: Invoice, checked: boolean) {
+        setSelectedInvoices(current => {
+            const updated = new Map(current);
+            if (checked) updated.set(invoice.id, invoice.pdfReady);
+            else updated.delete(invoice.id);
+            return updated;
+        });
+    }
+    async function selectAllInvoices(checked: boolean) {
+        if (!checked) { setSelectedInvoices(new Map()); setSelectionMode(false); return; }
+        const requestedCompanyId = currentCompanyId;
+        const requestedSearch = activeSearchTerm.current;
+        setSelectionMode(true);
+        setSelectionBusy(true); setError('');
+        try {
+            const query = new URLSearchParams({ search: requestedSearch });
+            const result = await api<{ items: { id: string; pdfReady: boolean }[] }>(`invoices/selection?${query}`,
+                undefined, requestedCompanyId);
+            if (requestedCompanyId !== activeCompanyId.current || requestedSearch !== activeSearchTerm.current) return;
+            setSelectedInvoices(new Map(result.items.map(invoice => [invoice.id, invoice.pdfReady])));
+        } catch (e) {
+            if (e instanceof Error && e.message === 'SIGN_IN') setAuthenticated(false);
+            else setError(e instanceof Error ? e.message : 'Could not select the invoices.');
+        } finally { setSelectionBusy(false); }
+    }
+    async function downloadSelected(kind: 'zip' | 'pdf') {
+        if (!currentCompanyId || !selectedInvoices.size) return;
+        setBulkDownloading(kind); setError('');
+        try {
+            const url = new URL(`/api/invoices/bulk/${kind}`, location.origin);
+            url.searchParams.set('companyId', currentCompanyId);
+            const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ invoiceIds: [...selectedInvoices.keys()] }) });
+            if (response.status === 401) throw new Error('SIGN_IN');
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                throw new Error(result.message ?? 'Could not prepare the selected invoices.');
+            }
+            const href = URL.createObjectURL(await response.blob());
+            const link = document.createElement('a');
+            link.href = href;
+            link.download = `invoice-${kind === 'zip' ? 'zips' : 'pdfs'}.zip`;
+            document.body.append(link); link.click(); link.remove();
+            setTimeout(() => URL.revokeObjectURL(href), 0);
+        } catch (e) {
+            if (e instanceof Error && e.message === 'SIGN_IN') setAuthenticated(false);
+            else setError(e instanceof Error ? e.message : 'Could not prepare the selected invoices.');
+        } finally { setBulkDownloading(null); }
+    }
     async function action(work: () => Promise<unknown>, message: string) {
         setBusy(true); setError(''); setNotice('');
         try { await work(); setNotice(message); await load(); }
@@ -319,8 +465,10 @@ function App() {
         } catch (e) { setMockError(e instanceof Error ? e.message : 'Could not update the simulator.'); }
         finally { setBusy(false); }
     }
-    if (authenticated === null && !error) return <div className="loading">Opening your invoice workspace…</div>;
+    if (authenticated === null && !error) return <><StandaloneThemeHeader />
+        <div className="loading">Opening your invoice workspace…</div></>;
     if (resetToken) return <main className="login-shell">
+        <StandaloneThemeHeader />
         <div className="brand"><span className="brand-icon">eF</span> eFactura <span>Manager</span></div>
         <form className="login-card" onSubmit={event => { event.preventDefault();
             if (resetPassword !== confirmResetPassword) {
@@ -347,6 +495,7 @@ function App() {
         </form>
     </main>;
     if (!authenticated && forgotOpen) return <main className="login-shell">
+        <StandaloneThemeHeader />
         {recoveryNotice && <div className="toast-stack"><Toast message={recoveryNotice}
             onDismiss={() => setRecoveryNotice('')} /></div>}
         <div className="brand"><span className="brand-icon">eF</span> eFactura <span>Manager</span></div>
@@ -367,6 +516,7 @@ function App() {
         </form>
     </main>;
     if (!authenticated) return <main className="login-shell">
+        <StandaloneThemeHeader />
         {recoveryNotice && <div className="toast-stack"><Toast message={recoveryNotice}
             onDismiss={() => setRecoveryNotice('')} /></div>}
         <div className="brand"><span className="brand-icon">eF</span> eFactura <span>Manager</span></div>
@@ -387,6 +537,7 @@ function App() {
         </form><p className="login-foot">Self-hosted. Your invoices stay in your workspace.</p>
     </main>;
     if (mustChangePassword) return <main className="login-shell">
+        <StandaloneThemeHeader />
         <div className="brand"><span className="brand-icon">eF</span> eFactura <span>Manager</span></div>
         <form className="login-card" onSubmit={event => { event.preventDefault();
             if (newPassword !== confirmPassword) { setError('The new passwords do not match.'); return; }
@@ -408,7 +559,8 @@ function App() {
             <button className="primary" disabled={busy}>Change password</button>
         </form>
     </main>;
-    if (!status) return <div className="loading">{error || 'Opening your invoice workspace…'}</div>;
+    if (!status) return <><StandaloneThemeHeader />
+        <div className="loading">{error || 'Opening your invoice workspace…'}</div></>;
     const workspace = status;
     const currentCompany = status.company;
     const currentCompanyId = currentCompany?.id ?? '';
@@ -428,7 +580,8 @@ function App() {
         if (id) localStorage.setItem('efactura-company', id);
         else localStorage.removeItem('efactura-company');
         activePage.current = 1;
-        setPage(1); setSelectedId(null); setInvoices([]); setInvoiceTotal(0); setMatchingTotal(0);
+        setPage(1); setSelectedId(null); setSelectedInvoices(new Map()); setSelectionMode(false);
+        setInvoices([]); setInvoiceTotal(0); setMatchingTotal(0);
         setEvents([]); setNotice(''); setError('');
         setStatus(current => current ? {
             ...current,
@@ -482,6 +635,9 @@ function App() {
         setNotice(`${target.name} was deleted.`);
     }
     const pageCount = Math.max(1, Math.ceil(matchingTotal / 50));
+    const allInvoicesSelected = matchingTotal > 0 && selectedInvoices.size === matchingTotal
+        && invoices.every(invoice => selectedInvoices.has(invoice.id));
+    const selectedPdfPending = [...selectedInvoices.values()].some(pdfReady => !pdfReady);
     const connection = status?.connection;
     const needsConnection = status?.mode === 'live' && connection && connection.state !== 'connected';
     const setup = needsConnection && currentCompany && !currentCompany.initialized && !skipSetup && tab === 'inbox';
@@ -517,7 +673,8 @@ function App() {
         <main className="main">
             <header className="topbar"><span>Workspace <span className="slash">/</span> {tab === 'connections' ? 'Manage ANAF connections'
                 : tab === 'add' || !currentCompany ? 'Add managed entity'
-                : `${currentCompany.name} / ${tab === 'inbox' ? 'Invoices' : tab === 'activity' ? 'Activity' : tab === 'mock' ? 'Mocked ANAF' : 'Settings'}`}</span></header>
+                : `${currentCompany.name} / ${tab === 'inbox' ? 'Invoices' : tab === 'activity' ? 'Activity' : tab === 'mock' ? 'Mocked ANAF' : 'Settings'}`}</span>
+                <ThemeSwitch /></header>
             {tab !== 'add' && tab !== 'connections' && currentCompany && <nav className="entity-tabs" aria-label="Entity views">
                 {([['inbox', 'Invoices'], ['activity', 'Activity'], ['settings', 'Settings'],
                     ...(status.mode === 'mock' ? [['mock', 'Mocked ANAF']] : [])]).map(([id, label]) =>
@@ -552,8 +709,12 @@ function App() {
                             <div className="dialog-actions"><button type="button" className="secondary" onClick={() => setCreatingConnection(false)}>Cancel</button>
                                 <button className="primary" disabled={busy}>Create connection</button></div>
                         </form>}
-                        {!!connections.length && <div className="table-scroll"><table className="connection-table"><thead><tr>
-                            <th>Connection</th><th>Status</th><th>Linked entities</th><th>Actions</th>
+                        {!!connections.length && <div className="table-scroll"><ResizableTable tableId="connections" columns={connectionColumns}
+                            className="connection-table"><thead><tr>
+                            <ResizableHeader columnId="connection">Connection</ResizableHeader>
+                            <ResizableHeader columnId="status">Status</ResizableHeader>
+                            <ResizableHeader columnId="entities">Linked entities</ResizableHeader>
+                            <ResizableHeader columnId="actions">Actions</ResizableHeader>
                         </tr></thead><tbody>{connections.map(managed => <tr key={managed.id}>
                             <td><strong>{managed.name}</strong>{managed.status.connectedAt &&
                                 <small>Connected on {date(managed.status.connectedAt)}</small>}</td>
@@ -580,7 +741,7 @@ function App() {
                                     navigate('add', activeCompanyId.current, managed.id);
                                 }}>Add entity</button>
                             </div></td>
-                        </tr>)}</tbody></table></div>}
+                        </tr>)}</tbody></ResizableTable></div>}
                     </section>
                 </> : tab === 'add' || !currentCompany ? <>
                     <section className="heading"><div><span className="eyebrow">MANAGED ENTITIES</span>
@@ -630,21 +791,49 @@ function App() {
                 </section>}
                 {tab === 'inbox' && !setup && <section className="card">
                     <div className="card-toolbar"><h2>All received invoices <span className="count">{matchingTotal}</span></h2>
-                        <input className="search" placeholder="Search supplier or invoice…" aria-label="Search invoices" value={search} onChange={e => setSearch(e.target.value)} /></div>
-                    <div className="table-scroll"><table><thead><tr><th>Supplier / invoice</th>
-                        <th aria-sort={invoiceSort.by === 'issue' ? invoiceSort.direction === 'asc' ? 'ascending' : 'descending' : 'none'}><button className="sort-heading" onClick={() => sortInvoices('issue')}>Issue date <span aria-hidden="true">{invoiceSort.by === 'issue' ? invoiceSort.direction === 'asc' ? '↑' : '↓' : '↕'}</span></button></th>
-                        <th aria-sort={invoiceSort.by === 'added' ? invoiceSort.direction === 'asc' ? 'ascending' : 'descending' : 'none'}><button className="sort-heading" onClick={() => sortInvoices('added')}>Added date <span aria-hidden="true">{invoiceSort.by === 'added' ? invoiceSort.direction === 'asc' ? '↑' : '↓' : '↕'}</span></button></th>
-                        <th>Invoice amount</th><th>Documents</th></tr></thead>
+                        <input className="search" placeholder="Search supplier or invoice…" aria-label="Search invoices" value={search}
+                            onChange={e => { setSearch(e.target.value); setSelectedInvoices(new Map()); setSelectionMode(false); }} /></div>
+                    <div id="invoice-table-scroll" ref={invoiceTableScroll} className="table-scroll invoice-table-scroll"
+                        role="region" aria-label="Invoice table" tabIndex={0}><ResizableTable tableId="invoices" columns={[
+                            ...(selectionMode ? [{ id: 'select', label: 'Select', defaultWidth: 48, minWidth: 44 }] : []),
+                            { id: 'supplier', label: 'Supplier / invoice', defaultWidth: 240, minWidth: 160,
+                                autoFitLines: 2, autoFitSelector: '.invoice-supplier', fillRemaining: true },
+                            { id: 'issue', label: 'Issue date', defaultWidth: 140 },
+                            { id: 'added', label: 'Added date', defaultWidth: 170 },
+                            { id: 'amount', label: 'Invoice amount', defaultWidth: 150 },
+                            { id: 'documents', label: 'Documents', defaultWidth: 160, minWidth: 120 },
+                        ]}><thead><tr className="bulk-actions-row"><th colSpan={selectionMode ? 6 : 5}>
+                        <div className="bulk-actions"><label className="bulk-select-all"><input type="checkbox" checked={allInvoicesSelected || selectionBusy}
+                            ref={element => { if (element) element.indeterminate = selectedInvoices.size > 0 && !allInvoicesSelected && !selectionBusy; }}
+                            disabled={!invoices.length || bulkDownloading !== null || selectionBusy}
+                            onChange={event => void selectAllInvoices(event.target.checked)} />
+                            Select all</label><span className="bulk-count">{selectedInvoices.size} selected</span>
+                            <div className="bulk-downloads"><button className="secondary" disabled={!selectedInvoices.size || bulkDownloading !== null || selectionBusy}
+                                onClick={() => void downloadSelected('zip')}>{bulkDownloading === 'zip' ? 'Preparing ZIPs…' : 'Download selected ZIPs'}</button>
+                                <button className="secondary" disabled={!selectedInvoices.size || selectedPdfPending || bulkDownloading !== null || selectionBusy}
+                                    title={selectedPdfPending ? 'A selected PDF is still being prepared.' : undefined}
+                                    onClick={() => void downloadSelected('pdf')}>{bulkDownloading === 'pdf' ? 'Preparing PDFs…' : 'Download selected PDFs'}</button></div>
+                        </div></th></tr><tr className="invoice-column-headings">{selectionMode && <ResizableHeader columnId="select"
+                            className="invoice-select-heading"><span className="visually-hidden">Select</span></ResizableHeader>}
+                        <ResizableHeader columnId="supplier">Supplier / invoice</ResizableHeader>
+                        <ResizableHeader columnId="issue" aria-sort={invoiceSort.by === 'issue' ? invoiceSort.direction === 'asc' ? 'ascending' : 'descending' : 'none'}><button className="sort-heading" onClick={() => sortInvoices('issue')}>Issue date <span aria-hidden="true">{invoiceSort.by === 'issue' ? invoiceSort.direction === 'asc' ? '↑' : '↓' : '↕'}</span></button></ResizableHeader>
+                        <ResizableHeader columnId="added" aria-sort={invoiceSort.by === 'added' ? invoiceSort.direction === 'asc' ? 'ascending' : 'descending' : 'none'}><button className="sort-heading" onClick={() => sortInvoices('added')}>Added date <span aria-hidden="true">{invoiceSort.by === 'added' ? invoiceSort.direction === 'asc' ? '↑' : '↓' : '↕'}</span></button></ResizableHeader>
+                        <ResizableHeader columnId="amount">Invoice amount</ResizableHeader>
+                        <ResizableHeader columnId="documents">Documents</ResizableHeader></tr></thead>
                         <tbody>{invoices.map(i => <tr key={i.id} className={`invoice-row${selectedId === i.id ? ' selected' : ''}`} onClick={event => {
-                            if ((event.target as Element).closest('a, button')) return;
+                            if ((event.target as Element).closest('a, button, input')) return;
                             event.currentTarget.querySelector<HTMLButtonElement>('.invoice-link')?.focus({ preventScroll: true });
                             setSelectedId(i.id);
                         }}>
-                            <td><button className="invoice-link" aria-expanded={selectedId === i.id} aria-controls={selectedId === i.id ? 'invoice-details' : undefined} onClick={() => setSelectedId(i.id)}>{i.supplier}<small>{i.number}</small></button></td>
+                            {selectionMode && <td className="invoice-select"><input type="checkbox" checked={selectedInvoices.has(i.id)} disabled={selectionBusy || bulkDownloading !== null}
+                                aria-label={`Select invoice ${i.number} from ${i.supplier}`} onChange={event => selectInvoice(i, event.target.checked)} /></td>}
+                            <td><button className="invoice-link" title={i.supplier} aria-expanded={selectedId === i.id}
+                                aria-controls={selectedId === i.id ? 'invoice-details' : undefined} onClick={() => setSelectedId(i.id)}>
+                                <span className="invoice-supplier">{i.supplier}</span><small>{i.number}</small></button></td>
                             <td>{formatInvoiceDate(i.issueDate)}</td><td>{i.addedDate ? formatAddedDate(i.addedDate) : '—'}</td>
                             <td className="amount">{i.total} <span>{i.currency}</span></td>
                             <td><a className="document" href={`/api/invoices/${i.id}/zip?companyId=${currentCompanyId}`}>ZIP ↓</a>{i.pdfReady ? <a className="document" href={`/api/invoices/${i.id}/pdf?companyId=${currentCompanyId}`}>PDF ↓</a> : <span className="muted">Preparing PDF</span>}</td>
-                        </tr>)}</tbody></table></div>
+                        </tr>)}</tbody></ResizableTable></div>
                     {!invoices.length && <div className="empty"><h2>{invoiceTotal ? 'No matching invoices' : 'Your inbox is ready'}</h2><p>{invoiceTotal ? 'Try a different supplier or invoice number.' : 'Run a synchronization to collect invoices from ANAF.'}</p></div>}
                     {matchingTotal > 0 && <nav className="pagination" aria-label="Invoice pages">
                         <span>Showing {(page - 1) * 50 + 1}–{Math.min(page * 50, matchingTotal)} of {matchingTotal}</span>
@@ -654,8 +843,11 @@ function App() {
                     </nav>}
                 </section>}
                 {tab === 'activity' && <section className="card"><div className="card-toolbar"><h2>Recent tasks</h2><span className="muted">Automatic retries with backoff</span></div>
-                    <div className="table-scroll"><table><thead><tr><th>Task</th><th>Status</th><th>Failed attempts</th><th>Details</th></tr></thead><tbody>{events.map(e => <tr key={e.id}><td>{e.kind === 'invoice.pdf' ? 'Generate PDF' : 'Send invoice email'}<small>{date(e.createdAt)}</small></td>
-                        <td><span className={`badge ${e.status}`}>{e.status === 'sent' ? 'Complete' : e.status}</span></td><td>{e.attempts}</td><td>{e.error ?? '—'}{['failed', 'skipped'].includes(e.status) && <button className="document" disabled={busy} onClick={() => void action(() => api(`events/${e.id}/retry`, {}, status?.company?.id), 'Task queued for another attempt.')}>Retry</button>}</td></tr>)}</tbody></table></div>
+                    <div className="table-scroll"><ResizableTable tableId="activity" columns={activityColumns}><thead><tr>
+                        <ResizableHeader columnId="task">Task</ResizableHeader><ResizableHeader columnId="status">Status</ResizableHeader>
+                        <ResizableHeader columnId="attempts">Failed attempts</ResizableHeader><ResizableHeader columnId="details">Details</ResizableHeader>
+                    </tr></thead><tbody>{events.map(e => <tr key={e.id}><td>{e.kind === 'invoice.pdf' ? 'Generate PDF' : 'Send invoice email'}<small>{date(e.createdAt)}</small></td>
+                        <td><span className={`badge ${e.status}`}>{e.status === 'sent' ? 'Complete' : e.status}</span></td><td>{e.attempts}</td><td>{e.error ?? '—'}{['failed', 'skipped'].includes(e.status) && <button className="document" disabled={busy} onClick={() => void action(() => api(`events/${e.id}/retry`, {}, status?.company?.id), 'Task queued for another attempt.')}>Retry</button>}</td></tr>)}</tbody></ResizableTable></div>
                     {!events.length && <div className="empty">No background activity yet.</div>}
                 </section>}
                 {tab === 'settings' && <div className="settings-grid">
@@ -697,6 +889,7 @@ function App() {
                 <footer>eFactura Manager · © {new Date().getFullYear()} MD AI RESEARCH SRL <span>Original documents stored in your workspace · {currentCompany?.environment === 'prod' ? 'Production API environment' : 'ANAF test environment'}</span></footer>
             </div>
         </main>
+        {tab === 'inbox' && !setup && !!invoices.length && <ViewportHorizontalScrollbar targetRef={invoiceTableScroll} />}
         {tab === 'inbox' && selected && currentCompany && <InvoiceDetails invoice={selected} companyId={currentCompany.id} onClose={() => setSelectedId(null)} />}
         {showInvoiceForm && status.mode === 'mock' && currentCompany && <SimulatedInvoiceForm companyId={currentCompany.id} onCancel={() => setShowInvoiceForm(false)} onCreated={number => {
             setShowInvoiceForm(false); setMockError('');
@@ -707,4 +900,4 @@ function App() {
             onDelete={() => removeCompany(deleteTarget)} />}
     </div>;
 }
-createRoot(document.getElementById('root')!).render(<ThemeProvider><App /><ThemeSwitch floating /></ThemeProvider>);
+createRoot(document.getElementById('root')!).render(<ThemeProvider><App /></ThemeProvider>);
