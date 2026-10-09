@@ -21,3 +21,16 @@ test('live ANAF documentation keeps the HTTPS Compose override and exact callbac
         assert.match(documentation, /exact (registered )?(OAuth )?callback/i);
     }
 });
+
+test('GitHub workflows pin the Ubuntu runner image', () => {
+    const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+    const release = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+
+    for (const workflow of [ci, release]) {
+        assert.doesNotMatch(workflow, /runs-on:\s*ubuntu-latest/);
+        assert.match(workflow, /runs-on:\s*ubuntu-24\.04/);
+    }
+
+    const configuredNodeSteps = ci.match(/- uses: actions\/checkout@v7\s+- uses: actions\/setup-node@v6\s+with:\s+node-version: 24\s+cache: npm/g);
+    assert.equal(configuredNodeSteps?.length, 2);
+});
