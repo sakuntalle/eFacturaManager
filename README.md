@@ -7,17 +7,64 @@ A self-hosted TypeScript application for collecting and viewing Romanian e-Factu
 
 **ANAF mode and email delivery are independent.** `ANAF_MODE=mock` uses synthetic invoice data; it does not disable email. Point SMTP at a real provider to receive those notifications in a real inbox.
 
-## Install a released version
+## Install a release (non-developers)
 
-The recommended non-developer installation uses Docker Desktop and a versioned image from GitHub Container Registry. It does not require Node.js or a source checkout.
+The recommended installation uses Docker Desktop, or Docker Engine with Compose v2. It downloads a ready-built image from the public [GitHub Container Registry package](https://github.com/sakuntalle/eFacturaManager/pkgs/container/efactura-manager), so it does not require Git, Node.js, npm or a source checkout.
 
-1. Download `compose.release.yaml` and `env.release.example` from the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest).
-2. Follow the [Docker Desktop installation guide](docs/docker-desktop.md) to generate local secrets, initialize the administrator and start the application.
-3. Open <http://localhost:3100>.
+### Supported platforms
 
-Published images support Intel/AMD and Apple Silicon/ARM Linux containers. Releases are tagged as `ghcr.io/sakuntalle/efactura-manager:<version>`. After the first release workflow completes, the GHCR package must be made public in the repository owner's package settings so Docker Desktop users can pull it without authentication.
+The release is a Linux container image published for both common 64-bit CPU architectures:
 
-For source development, see [docs/development.md](docs/development.md). For live ANAF authorization, read [docs/live-connection.md](docs/live-connection.md) before adding private credentials.
+| Container platform | Typical Docker hosts |
+| --- | --- |
+| `linux/amd64` | 64-bit Intel/AMD Linux, or a Windows/macOS Docker installation capable of running AMD64 Linux containers |
+| `linux/arm64` | 64-bit ARM Linux and Apple Silicon Docker Desktop |
+
+This includes current 64-bit Intel/AMD computers and Apple Silicon Macs. Native Windows containers, 32-bit x86, ARMv7 and other 32-bit systems are not supported. Docker runs the Linux image in its managed Linux environment on macOS and Windows; it does not install the application directly into the host operating system.
+
+Release images use `ghcr.io/sakuntalle/efactura-manager:<version>`. Each release publishes the exact version, minor, major and `latest` tags—for example `1.0.0`, `1.0`, `1` and `latest`. For a repeatable installation, keep the exact version written into the release environment file.
+
+### First installation
+
+1. Install and start Docker Desktop, or Docker Engine with Compose v2.
+2. Create an empty installation folder. From the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest), download `compose.release.yaml` and `env.release.example` into it.
+3. Rename `env.release.example` to `.env`.
+4. Generate two different random values with the command below. Put one in `POSTGRES_PASSWORD` and the other in `APP_SESSION_SECRET` inside `.env`.
+
+    ```sh
+    docker run --rm node:24-alpine node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+    ```
+
+5. Create the private administrator folder:
+
+    ```sh
+    mkdir -p .local/admin
+    ```
+
+    In Windows PowerShell, use `New-Item -ItemType Directory -Force .local/admin` instead.
+
+6. Pull the release, initialize its database and create the administrator:
+
+    ```sh
+    docker compose --env-file .env -f compose.release.yaml pull
+    docker compose --env-file .env -f compose.release.yaml up -d database
+    docker compose --env-file .env -f compose.release.yaml --profile tools run --rm admin-bootstrap
+    docker compose --env-file .env -f compose.release.yaml up -d
+    ```
+
+7. Open <http://localhost:3100>, sign in as `admin` with the generated password in `.local/admin/README.md`, and change it when prompted. The local test email inbox is available at <http://localhost:8025>.
+
+The Compose installation runs five services: the web application, background worker, PostgreSQL database, simulated ANAF provider and Mailpit test inbox. PostgreSQL and simulator data live in named Docker volumes, so rebuilding, upgrading, stopping or recreating containers preserves them. `docker compose down` retains this data; `docker compose down -v` permanently deletes it and should only be used when intentionally resetting the installation.
+
+The default release starts in safe simulator mode over HTTP. A live ANAF connection requires locally trusted certificates and the exact registered HTTPS callback, normally `https://localhost:8765/callback`. Download `compose.https.yaml`, complete the [live ANAF setup](docs/live-connection.md), and then start the release with both Compose files:
+
+```sh
+docker compose --env-file .env -f compose.release.yaml -f compose.https.yaml up -d
+```
+
+Open <https://localhost:8765> for the live installation. Keep `.env`, `.local`, database backups and encryption keys private. The complete platform-specific setup and upgrade instructions are in the [Docker Desktop installation guide](docs/docker-desktop.md).
+
+For source development, see [docs/development.md](docs/development.md).
 
 ## Build the current source with Docker
 

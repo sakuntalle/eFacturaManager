@@ -46,3 +46,16 @@ test('release publishes the environment template with a downloadable filename', 
     assert.ok(readme.includes('`env.release.example`'));
     assert.ok(dockerGuide.includes('Rename `env.release.example` to `.env`'));
 });
+
+test('README documents the supported release platforms and non-developer installation', () => {
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+
+    assert.match(readme, /## Install a release \(non-developers\)/);
+    assert.ok(readme.includes('`linux/amd64`'));
+    assert.ok(readme.includes('`linux/arm64`'));
+    assert.ok(readme.includes('Native Windows containers'));
+    assert.ok(readme.includes('docker compose --env-file .env -f compose.release.yaml pull'));
+    assert.ok(readme.includes('--profile tools run --rm admin-bootstrap'));
+    assert.ok(readme.includes('docker compose down -v` permanently deletes'));
+    assert.ok(readme.includes('-f compose.release.yaml -f compose.https.yaml up -d'));
+});
