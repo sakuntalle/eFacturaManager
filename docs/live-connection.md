@@ -4,10 +4,12 @@ The app login authenticates the local workspace administrator. Each ANAF connect
 
 ## Local Docker HTTPS
 
+These steps work with either a source checkout or a published release. For a Docker Desktop release installation, download `compose.https.yaml` with the other release assets, replace `compose.yaml` with `compose.release.yaml` in every command below, omit `--build`, and use the release bootstrap command from [docker-desktop.md](docker-desktop.md) instead of `npm run admin:bootstrap`.
+
 1. Keep your deployment's registration in the private `.env`: `ANAF_CLIENT_ID`, `ANAF_CLIENT_SECRET`, and `ANAF_REDIRECT_URI=https://localhost:8765/callback`. These application credentials are shared by the installation; each connection stores its own encrypted certificate grant. Keep `ANAF_CIF` set to the original company that established the primary connection; it anchors its existing encrypted token. Do not commit, copy into the frontend, or print this file.
 2. Set `APP_SESSION_SECRET` to at least 32 characters. Set `ANAF_TOKEN_ENCRYPTION_KEY` to a randomly generated 32-byte base64 value. Keep it stable across restarts and securely back it up. The web app and worker must share it. The administrator password is generated into PostgreSQL during bootstrap, not configured in `.env`. Quote configuration values that contain `#` so Node and Docker parse them consistently.
 3. Create a locally trusted certificate covering `localhost` and `127.0.0.1` with mkcert. On macOS, `mkcert -install` may ask for your system password in Terminal. Certificate files belong at `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem`. Keep the private key private. Windows and Linux also support mkcert; follow its platform-specific trust installation instructions.
-4. Set `ANAF_MODE=live` and `APP_PUBLIC_URL=https://localhost:8765` in `.env`. Start with:
+4. Set `ANAF_MODE=live` and `APP_PUBLIC_URL=https://localhost:8765` in `.env`. From a source checkout, start with:
 
     ```sh
     docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d database

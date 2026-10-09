@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!.env.release.example
 .local/
 downloads/
 node_modules/

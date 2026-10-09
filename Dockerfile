@@ -13,6 +13,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && mkdir -p /app/data /app/mock-data && chown -R node:node /app/data /app/mock-data
+COPY LICENSE README.md ./
 COPY --from=build /app/dist ./dist
 USER node
 EXPOSE 3100

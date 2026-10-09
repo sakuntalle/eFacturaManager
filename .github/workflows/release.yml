@@ -1,0 +1,101 @@
+name: Publish release
+
+run-name: Release v${{ inputs.version }} requested by ${{ github.actor }}
+
+on:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: Version to release, without the leading v (for example, 1.0.0)
+                required: true
+                type: string
+
+permissions:
+    contents: write
+    packages: write
+
+concurrency:
+    group: publish-release
+    cancel-in-progress: false
+
+jobs:
+    publish:
+        if: github.actor == 'sakuntalle' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: main
+            - name: Validate release version
+              id: version
+              env:
+                  REQUESTED_VERSION: ${{ inputs.version }}
+              run: |
+                  if [[ ! "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                      echo "The release version must use the x.y.z format." >&2
+                      exit 1
+                  fi
+
+                  package_version="$(node -p "require('./package.json').version")"
+                  if [[ "$REQUESTED_VERSION" != "$package_version" ]]; then
+                      echo "The requested version does not match package.json." >&2
+                      exit 1
+                  fi
+
+                  major="${REQUESTED_VERSION%%.*}"
+                  remainder="${REQUESTED_VERSION#*.}"
+                  minor="${remainder%%.*}"
+                  echo "version=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+                  echo "tag=v$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+                  echo "major=$major" >> "$GITHUB_OUTPUT"
+                  echo "minor=$major.$minor" >> "$GITHUB_OUTPUT"
+            - name: Ensure the version has not already been released
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  RELEASE_TAG: ${{ steps.version.outputs.tag }}
+              run: |
+                  if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+                      echo "Tag $RELEASE_TAG already exists." >&2
+                      exit 1
+                  fi
+            - uses: docker/setup-buildx-action@v3
+            - uses: docker/login-action@v3
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+            - id: metadata
+              uses: docker/metadata-action@v5
+              with:
+                  images: ghcr.io/sakuntalle/efactura-manager
+                  tags: |
+                      type=raw,value=${{ steps.version.outputs.version }}
+                      type=raw,value=${{ steps.version.outputs.minor }}
+                      type=raw,value=${{ steps.version.outputs.major }}
+                      type=raw,value=latest
+                  labels: |
+                      org.opencontainers.image.title=eFactura Manager
+                      org.opencontainers.image.description=Self-hosted Romanian e-Factura invoice manager
+                      org.opencontainers.image.licenses=GPL-3.0-or-later
+                      org.opencontainers.image.source=https://github.com/sakuntalle/eFacturaManager
+            - uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: true
+                  platforms: linux/amd64,linux/arm64
+                  tags: ${{ steps.metadata.outputs.tags }}
+                  labels: ${{ steps.metadata.outputs.labels }}
+            - name: Create release and attach Docker Desktop files
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  RELEASE_VERSION: ${{ steps.version.outputs.version }}
+                  RELEASE_TAG: ${{ steps.version.outputs.tag }}
+              run: |
+                  sed -i "s/^EFACTURA_VERSION=.*/EFACTURA_VERSION=$RELEASE_VERSION/" .env.release.example
+                  gh release create "$RELEASE_TAG" \
+                      --target "$GITHUB_SHA" \
+                      --title "$RELEASE_TAG" \
+                      --generate-notes \
+                      compose.release.yaml \
+                      compose.https.yaml \
+                      .env.release.example

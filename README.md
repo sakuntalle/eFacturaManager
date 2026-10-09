@@ -1,10 +1,25 @@
 # eFactura Manager
 
+[![CI](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml/badge.svg)](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml)
+[![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3_or_later-blue.svg)](LICENSE)
+
 A self-hosted TypeScript application for collecting and viewing Romanian e-Factura invoices. Development currently uses a local ANAF simulator. The React interface, NestJS API, PostgreSQL database, pg-boss workers, file storage and SMTP delivery are real components.
 
 **ANAF mode and email delivery are independent.** `ANAF_MODE=mock` uses synthetic invoice data; it does not disable email. Point SMTP at a real provider to receive those notifications in a real inbox.
 
-## Start with Docker
+## Install a released version
+
+The recommended non-developer installation uses Docker Desktop and a versioned image from GitHub Container Registry. It does not require Node.js or a source checkout.
+
+1. Download `compose.release.yaml` and `.env.release.example` from the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest).
+2. Follow the [Docker Desktop installation guide](docs/docker-desktop.md) to generate local secrets, initialize the administrator and start the application.
+3. Open <http://localhost:3100>.
+
+Published images support Intel/AMD and Apple Silicon/ARM Linux containers. Releases are tagged as `ghcr.io/sakuntalle/efactura-manager:<version>`. After the first release workflow completes, the GHCR package must be made public in the repository owner's package settings so Docker Desktop users can pull it without authentication.
+
+For source development, see [docs/development.md](docs/development.md). For live ANAF authorization, read [docs/live-connection.md](docs/live-connection.md) before adding private credentials.
+
+## Build the current source with Docker
 
 ```sh
 npm ci
@@ -212,3 +227,11 @@ To diagnose failures, run `docker compose --env-file .env -f compose.yaml -f com
 For cloud hosting later, substitute managed storage/queue adapters and add deployment-specific HTTPS, secret management and monitoring. Windows/Linux Docker compatibility follows the Linux-container packaging, but those host systems have not yet been separately exercised.
 
 Invoice amounts in the inbox, details and notifications use the XML total including VAT (`TaxInclusiveAmount`), rather than the remaining balance (`PayableAmount`). Existing stored amounts are corrected from the XML inside their original ZIP once at startup, transactionally per company. This does not modify source documents or resend notifications. Missing or invalid source XML prevents the correction from committing. After `npm run build`, run `node scripts/invoice-totals-integration.mjs` with the local development database to verify migration rollback, concurrency and idempotency using isolated synthetic records. Run `npm run test:files` to verify database document storage and interrupted-migration recovery.
+
+## Contributing, security and license
+
+Contributions are welcome; read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+Releases are published manually by the repository owner. The maintainer workflow and required GitHub branch rules are documented in [docs/releasing.md](docs/releasing.md).
+
+Copyright © 2026 Mihnea Magheru. This project is free software licensed under [GNU GPL version 3 or later](LICENSE). It is provided without warranty; review the license and deployment guidance before using it with production data.
