@@ -1,6 +1,6 @@
 # eFactura Manager
 
-[![CI](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml/badge.svg)](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml)
+[![CI](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml)
 [![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3_or_later-blue.svg)](LICENSE)
 
 A self-hosted TypeScript application for collecting and viewing Romanian e-Factura invoices. Development currently uses a local ANAF simulator. The React interface, NestJS API, PostgreSQL database, pg-boss workers, file storage and SMTP delivery are real components.
