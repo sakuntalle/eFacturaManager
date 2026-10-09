@@ -79,3 +79,11 @@ docker compose --env-file .env.example up --build -d
 ```
 
 Open <http://localhost:3100>. Stop the stack with `docker compose --env-file .env.example down`; omit `-v` unless you intentionally want to delete the database and mock-data volumes.
+
+This HTTP command is for mock development. A live ANAF connection must return to the exact registered OAuth callback. If the registered callback is `https://localhost:8765/callback`, keep the private live settings in `.env` and always include the HTTPS override when rebuilding or restarting the Docker development stack:
+
+```sh
+docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --build
+```
+
+Open <https://localhost:8765>. Omitting `compose.https.yaml` leaves only the base HTTP configuration and prevents the registered HTTPS callback from completing. See the [live connection guide](live-connection.md) for certificate creation and the complete setup. The rebuild preserves named volumes; never add `-v` unless the database and mock data should be deleted.

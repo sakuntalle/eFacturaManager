@@ -34,6 +34,14 @@ This explicitly uses the supplied local development configuration, avoiding any 
 - Sign in: username `admin`; read the unique 12-character temporary password in `.local/admin/README.md`
 - Local email inbox (Mailpit): <http://localhost:8025>
 
+The commands above intentionally use the public mock configuration and its HTTP endpoint. They are not suitable for completing a live ANAF authorization. ANAF redirects the browser to the exact callback registered for the OAuth application, including its scheme and port. When that callback is `https://localhost:8765/callback`, build and start an existing local HTTPS installation with both Compose files:
+
+```sh
+docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --build
+```
+
+Then open <https://localhost:8765>. Always include `compose.https.yaml` when rebuilding or recreating this installation. Omitting it starts only the base HTTP configuration, which cannot receive the registered HTTPS callback. The command preserves the existing PostgreSQL and mock-data volumes; do not add `-v` when stopping the stack unless you intend to delete them.
+
 The bootstrap command creates the one administrator account in PostgreSQL and writes its initial password to the local, Git-ignored README with owner-only file permissions. It generates the password once for a new database; rerunning the command leaves an existing account unchanged. The first login requires a password change before any workspace page or API can be used. After that change, the app opens **Manage ANAF connections**. A fresh workspace has no entities or connections: create a connection, add a company or individual linked to it, then authorize it in live mode. Existing installations retain their entities and connections. Use the same bootstrap command with your local `.env` when upgrading an existing installation. Never copy the local password README into a public repository.
 
 ### Switch the active database

@@ -76,4 +76,12 @@ Do not add `-v` unless you intentionally want to permanently delete the PostgreS
 
 Live ANAF requires private OAuth settings, a stable token-encryption key, an exact registered HTTPS callback and locally trusted certificates. Download `compose.https.yaml` from the same release and follow [the live connection guide](live-connection.md). Use `compose.release.yaml` in place of `compose.yaml` in its Docker commands, and omit `--build`.
 
+After the live settings and certificates are configured, always start or recreate the released HTTPS installation with both Compose files:
+
+```sh
+docker compose --env-file .env -f compose.release.yaml -f compose.https.yaml up -d
+```
+
+Open <https://localhost:8765>. ANAF redirects the browser to the exact registered callback, so a registration for `https://localhost:8765/callback` cannot complete against the base HTTP-only command. This command preserves the existing database volume.
+
 This project has not undergone an independent security audit. Back up the database and encryption key, restrict access to the host and review the deployment for your environment before storing production invoice data.
