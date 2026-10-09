@@ -11,7 +11,7 @@ A self-hosted TypeScript application for collecting and viewing Romanian e-Factu
 
 The recommended non-developer installation uses Docker Desktop and a versioned image from GitHub Container Registry. It does not require Node.js or a source checkout.
 
-1. Download `compose.release.yaml` and `.env.release.example` from the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest).
+1. Download `compose.release.yaml` and `env.release.example` from the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest).
 2. Follow the [Docker Desktop installation guide](docs/docker-desktop.md) to generate local secrets, initialize the administrator and start the application.
 3. Open <http://localhost:3100>.
 

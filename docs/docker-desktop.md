@@ -6,8 +6,8 @@ This path runs a published image and does not require Git, Node.js or a source c
 
 1. Open the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest).
 2. Create an empty folder for the installation.
-3. Download `compose.release.yaml` and `.env.release.example` from the release assets into that folder.
-4. Rename `.env.release.example` to `.env`. Release assets already contain the matching image version; for the first release this is `EFACTURA_VERSION=1.0.0` from tag `v1.0.0`.
+3. Download `compose.release.yaml` and `env.release.example` from the release assets into that folder.
+4. Rename `env.release.example` to `.env`. Release assets already contain the matching image version; for the first release this is `EFACTURA_VERSION=1.0.0` from tag `v1.0.0`.
 5. Replace `POSTGRES_PASSWORD` and `APP_SESSION_SECRET` with two different random values. This command prints one suitable value; run it twice and copy each result to the appropriate setting:
 
     ```sh
