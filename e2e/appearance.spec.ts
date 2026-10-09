@@ -28,6 +28,7 @@ async function workspace(page: Page, mode: 'mock' | 'live') {
 
 test('dark mode persists, stays accessible in the main UI and is inherited by the invoice dialog', async ({ page }, info) => {
     await page.emulateMedia({ colorScheme: 'light' });
+    await page.route('**/api/session', route => route.fulfill({ status: 401, json: {} }));
     await page.goto('/');
     const theme = page.getByRole('switch', { name: 'Dark mode' });
     await expect(page.getByRole('button', { name: /Sign in/ })).toBeVisible();

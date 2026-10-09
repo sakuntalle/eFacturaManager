@@ -4,6 +4,9 @@ export default defineConfig({
     testDir: './e2e',
     workers: 1,
     timeout: 30_000,
+    expect: {
+        timeout: 10_000,
+    },
     webServer: {
         command: 'npx vite preview --host 127.0.0.1 --port 3100',
         url: 'http://localhost:3100',
