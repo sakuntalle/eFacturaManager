@@ -47,6 +47,20 @@ test('release publishes the environment template with a downloadable filename', 
     assert.ok(dockerGuide.includes('Rename `env.release.example` to `.env`'));
 });
 
+test('release requires curated versioned notes and preserves GitHub generated notes', () => {
+    const workflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+    const releaseGuide = readFileSync(new URL('../docs/releases/README.md', import.meta.url), 'utf8');
+    const currentNotes = readFileSync(new URL('../docs/releases/v1.0.1.md', import.meta.url), 'utf8');
+
+    assert.ok(workflow.includes('notes_file="docs/releases/v$REQUESTED_VERSION.md"'));
+    assert.ok(workflow.includes('if [[ ! -s "$notes_file" ]]'));
+    assert.ok(workflow.includes('RELEASE_NOTES_FILE: ${{ steps.version.outputs.notes_file }}'));
+    assert.match(workflow, /--generate-notes\s+\\\s+--notes "\$\(cat "\$RELEASE_NOTES_FILE"\)"/);
+    assert.ok(releaseGuide.includes('npm version X.Y.Z --no-git-tag-version'));
+    assert.match(currentNotes, /^## Highlights/m);
+    assert.match(currentNotes, /^## Upgrade notes/m);
+});
+
 test('README documents the supported release platforms and non-developer installation', () => {
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 

@@ -13,7 +13,7 @@ The recommended installation uses Docker Desktop, or Docker Engine with Compose 
 
 ### Supported platforms
 
-The release is a Linux container image published for both common 64-bit CPU architectures:
+The release is a Linux container image published for both common 64-bit CPU architectures. Each GitHub release includes curated highlights and upgrade guidance followed by GitHub's generated change and contributor list.
 
 | Container platform | Typical Docker hosts |
 | --- | --- |

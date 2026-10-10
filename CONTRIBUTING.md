@@ -32,6 +32,8 @@ For user-interface changes, also run the affected Playwright tests. The full loc
 
 Every pull request runs both the unit/build check and the complete Playwright browser suite in CI. Both checks must pass before merging.
 
+Maintainer releases follow the versioning and release-note checklist in [docs/releases/README.md](docs/releases/README.md). The release workflow requires a curated `docs/releases/vX.Y.Z.md` file and appends GitHub's generated pull-request changelog.
+
 ## Pull requests
 
 All changes to `main` must go through a pull request. Describe what changed, why it changed and how it was verified. Link the relevant issue when one exists. Keep unrelated formatting or refactoring out of the pull request. Reviewers may ask for tests, migration notes, screenshots or documentation updates proportional to the change.

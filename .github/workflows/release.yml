@@ -42,6 +42,12 @@ jobs:
                       exit 1
                   fi
 
+                  notes_file="docs/releases/v$REQUESTED_VERSION.md"
+                  if [[ ! -s "$notes_file" ]]; then
+                      echo "Release notes are required at $notes_file." >&2
+                      exit 1
+                  fi
+
                   major="${REQUESTED_VERSION%%.*}"
                   remainder="${REQUESTED_VERSION#*.}"
                   minor="${remainder%%.*}"
@@ -49,6 +55,7 @@ jobs:
                   echo "tag=v$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
                   echo "major=$major" >> "$GITHUB_OUTPUT"
                   echo "minor=$major.$minor" >> "$GITHUB_OUTPUT"
+                  echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
             - name: Ensure the version has not already been released
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,6 +97,7 @@ jobs:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                   RELEASE_VERSION: ${{ steps.version.outputs.version }}
                   RELEASE_TAG: ${{ steps.version.outputs.tag }}
+                  RELEASE_NOTES_FILE: ${{ steps.version.outputs.notes_file }}
               run: |
                   sed -i "s/^EFACTURA_VERSION=.*/EFACTURA_VERSION=$RELEASE_VERSION/" .env.release.example
                   cp .env.release.example env.release.example
@@ -97,6 +105,7 @@ jobs:
                       --target "$GITHUB_SHA" \
                       --title "$RELEASE_TAG" \
                       --generate-notes \
+                      --notes "$(cat "$RELEASE_NOTES_FILE")" \
                       compose.release.yaml \
                       compose.https.yaml \
                       env.release.example
