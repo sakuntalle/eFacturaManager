@@ -40,7 +40,7 @@ export class LiveOAuthGateway implements OAuthGateway {
     refresh(token: string) {
         return getTokens(this.cfg.oauth, new URLSearchParams({ grant_type: 'refresh_token', refresh_token: token }));
     }
-    async verify(token: string) { await new AnafClient(this.cfg.environment, token).list(this.cfg.cif, 1); }
+    async verify(token: string) { await new AnafClient(token).list(this.cfg.CIF, 1); }
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export type ConnectionFailureReporter = (step: ConnectionFailure, status?: number) => void;
@@ -55,22 +55,21 @@ export class AnafConnection {
     private attemptFingerprint: string;
     constructor(private cfg: Config, private store: ConnectionStore, private gateway: OAuthGateway = new LiveOAuthGateway(cfg)) {
         this.key = Buffer.from(cfg.oauth.encryptionKey, 'base64');
-        this.ready = cfg.mode === 'live' && !!cfg.oauth.clientId && !!cfg.oauth.clientSecret
+        this.ready = !!cfg.oauth.clientId && !!cfg.oauth.clientSecret
             && this.key.length === 32 && cfg.publicUrl.startsWith('https:')
             && cfg.oauth.redirectUri === `${cfg.publicUrl}/callback`;
         this.fingerprint = this.ready ? createHmac('sha256', this.key).update(JSON.stringify([
-            cfg.oauth.clientId, cfg.oauth.clientSecret, cfg.oauth.redirectUri, cfg.cif, cfg.environment,
+            cfg.oauth.clientId, cfg.oauth.clientSecret, cfg.oauth.redirectUri, cfg.CIF,
         ])).digest('hex') : '';
         this.attemptFingerprint = createHmac('sha256', cfg.sessionSecret).update(this.fingerprint).digest('hex');
     }
     async status(): Promise<ConnectionStatus> {
-        if (this.cfg.mode === 'mock') return { state: 'mock', canConnect: false, connectedAt: null };
         if (!this.ready) return { state: 'unconfigured', canConnect: false, connectedAt: null };
         const row = await this.store.connection();
         return { state: !row || row.state === 'disconnected' ? 'disconnected' : row.fingerprint === this.fingerprint ? row.state : 'reconnect_required',
             canConnect: true, connectedAt: row?.connectedAt ?? null };
     }
-    async available() { return ['mock', 'connected'].includes((await this.status()).state); }
+    async available() { return (await this.status()).state === 'connected'; }
     private seal(tokens: StoredTokens): string {
         const iv = randomBytes(12);
         const cipher = createCipheriv('aes-256-gcm', this.key, iv);

@@ -1,8 +1,6 @@
-import type { AnafMode } from './config.js';
-
 export type InvoiceData = {
     number: string; issueDate: string; dueDate: string; supplier: string;
-    supplierCif: string; currency: string; net: string; tax: string; total: string;
+    supplierCIF: string; currency: string; net: string; tax: string; total: string;
     // Version marker for stored projections; total is the full invoice value, including VAT.
     totalBasis?: 'tax-inclusive';
     lines: { description: string; quantity: string; amount: string }[];
@@ -14,9 +12,9 @@ export type InvoiceSort = 'issue' | 'added';
 export type SortDirection = 'asc' | 'desc';
 export type InvoicePage = { items: Invoice[]; total: number; allTotal: number; page: number; pageSize: number };
 export type Company = {
-    id: string; workspaceId: string; cif: string; name: string; kind: 'company' | 'individual';
+    id: string; workspaceId: string; CIF: string; name: string; kind: 'company' | 'individual';
     connectionId: string;
-    emailTo: string; emailEnabled: boolean; mode: AnafMode; environment: 'prod' | 'test';
+    emailTo: string; emailEnabled: boolean;
     pollSeconds: number; lastSync: string | null; nextSync: string;
     syncError: string | null; initialized: boolean;
 };
@@ -76,11 +74,11 @@ export interface AnafGateway {
 }
 
 export type ConnectionStatus = {
-    state: 'mock' | 'needs_entity' | 'unconfigured' | 'disconnected' | 'connected' | 'reconnect_required';
+    state: 'needs_entity' | 'unconfigured' | 'disconnected' | 'connected' | 'reconnect_required';
     canConnect: boolean;
     connectedAt: string | null;
 };
 export type ManagedConnection = {
-    id: string; name: string; verificationCif: string | null; entityIds: string[];
+    id: string; name: string; verificationCIF: string | null; entityIds: string[];
     status: ConnectionStatus;
 };

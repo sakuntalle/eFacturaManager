@@ -9,7 +9,7 @@ type Context = {
     days?: number;
     durationMs?: number;
     httpStatus?: number;
-    operation?: 'authentication' | 'connection' | 'companies' | 'invoices' | 'sync' | 'settings' | 'events' | 'mock' | 'other';
+    operation?: 'authentication' | 'connection' | 'companies' | 'invoices' | 'sync' | 'settings' | 'events' | 'other';
 };
 
 export function diagnosticReference(value: string) {
@@ -47,7 +47,7 @@ export function failureDetails(error: unknown) {
     return { category: 'unexpected' };
 }
 
-export function logFailure(module: 'web' | 'worker' | 'queue' | 'email' | 'mock', stage: string,
+export function logFailure(module: 'web' | 'worker' | 'queue' | 'email', stage: string,
     error: unknown, context: Context = {}) {
     console.error(JSON.stringify({ level: 'error', module, stage, ...safeContext(context), ...failureDetails(error) }));
 }
