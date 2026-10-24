@@ -107,5 +107,4 @@ jobs:
                       --generate-notes \
                       --notes "$(cat "$RELEASE_NOTES_FILE")" \
                       compose.release.yaml \
-                      compose.https.yaml \
                       env.release.example

@@ -70,20 +70,22 @@ The browser suite uses controlled API responses and does not need the real admin
 
 ## Docker development build
 
+Before the first Docker launch, create and trust `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem` using the [local HTTPS setup](local-https.md). If your `.env` previously used HTTP, update `APP_PUBLIC_URL` and `APP_TLS_PORT` using that guide's migration instructions.
+
 To exercise the image built from the current checkout:
 
 ```sh
 docker compose --env-file .env.example up -d database
-DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
+DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=https://localhost:8765 npm run admin:bootstrap
 docker compose --env-file .env.example up --build -d
 ```
 
-Open <http://localhost:3100>. Stop the stack with `docker compose --env-file .env.example down`; omit `-v` unless you intentionally want to delete the database and mock-data volumes.
+Open <https://localhost:8765>. Stop the stack with `docker compose --env-file .env.example down`; omit `-v` unless you intentionally want to delete the database and mock-data volumes.
 
-This HTTP command is for mock development. A live ANAF connection must return to the exact registered OAuth callback. If the registered callback is `https://localhost:8765/callback`, keep the private live settings in `.env` and always include the HTTPS override when rebuilding or restarting the Docker development stack:
+The Docker development stack always uses HTTPS. A live ANAF connection must return to the exact registered OAuth callback. If the registered callback is `https://localhost:8765/callback`, keep the private live settings in `.env` when rebuilding or restarting it:
 
 ```sh
-docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --build
+docker compose --env-file .env -f compose.yaml up -d --build
 ```
 
-Open <https://localhost:8765>. Omitting `compose.https.yaml` leaves only the base HTTP configuration and prevents the registered HTTPS callback from completing. See the [live connection guide](live-connection.md) for certificate creation and the complete setup. The rebuild preserves named volumes; never add `-v` unless the database and mock data should be deleted.
+Open <https://localhost:8765>. See the [live connection guide](live-connection.md) for certificate creation and the complete setup. The rebuild preserves named volumes; never add `-v` unless the database and mock data should be deleted.

@@ -4,24 +4,24 @@ The app login authenticates the local workspace administrator. Each ANAF connect
 
 ## Local Docker HTTPS
 
-These steps work with either a source checkout or a published release. For a Docker Desktop release installation, download `compose.https.yaml` with the other release assets, replace `compose.yaml` with `compose.release.yaml` in every command below, omit `--build`, and use the release bootstrap command from [docker-desktop.md](docker-desktop.md) instead of `npm run admin:bootstrap`.
+These steps work with either a source checkout or a published release. For a Docker Desktop release installation, replace `compose.yaml` with `compose.release.yaml` in every command below, omit `--build`, and use the release bootstrap command from [docker-desktop.md](docker-desktop.md) instead of `npm run admin:bootstrap`.
 
-The HTTPS override is required for the local ANAF OAuth flow. ANAF returns the browser to the exact registered callback URI, including the `https` scheme and port `8765`. Starting only the base Compose file exposes the mock-oriented HTTP application and cannot receive a callback registered as `https://localhost:8765/callback`. Use both Compose files for every start, rebuild and service recreation of a live local installation.
+Docker Compose always starts the HTTPS listener. ANAF returns the browser to the exact registered callback URI, including the `https` scheme and port `8765`.
 
 1. Keep your deployment's registration in the private `.env`: `ANAF_CLIENT_ID`, `ANAF_CLIENT_SECRET`, and `ANAF_REDIRECT_URI=https://localhost:8765/callback`. These application credentials are shared by the installation; each connection stores its own encrypted certificate grant. Keep `ANAF_CIF` set to the original company that established the primary connection; it anchors its existing encrypted token. Do not commit, copy into the frontend, or print this file.
 2. Set `APP_SESSION_SECRET` to at least 32 characters. Set `ANAF_TOKEN_ENCRYPTION_KEY` to a randomly generated 32-byte base64 value. Keep it stable across restarts and securely back it up. The web app and worker must share it. The administrator password is generated into PostgreSQL during bootstrap, not configured in `.env`. Quote configuration values that contain `#` so Node and Docker parse them consistently.
-3. Create a locally trusted certificate covering `localhost` and `127.0.0.1` with mkcert. On macOS, `mkcert -install` may ask for your system password in Terminal. Certificate files belong at `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem`. Keep the private key private. Windows and Linux also support mkcert; follow its platform-specific trust installation instructions.
-4. Set `ANAF_MODE=live` and `APP_PUBLIC_URL=https://localhost:8765` in `.env`. From a source checkout, start with:
+3. Create and trust the certificates using the [local HTTPS setup](local-https.md), which includes macOS/Linux and Windows PowerShell commands. Files belong at `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem`.
+4. Set `ANAF_MODE=live`, `APP_PUBLIC_URL=https://localhost:8765`, and `APP_TLS_PORT=8765` in `.env`. Replace any old HTTP public URL; Docker rejects it at startup. From a source checkout, start with:
 
     ```sh
-    docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d database
+    docker compose --env-file .env -f compose.yaml up -d database
     npm run admin:bootstrap
-    docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --build
+    docker compose --env-file .env -f compose.yaml up -d --build
     ```
 
 5. Open `https://localhost:8765`, sign in as `admin` with the temporary password in the Git-ignored `.local/admin/README.md`, and complete the mandatory password change. Open **Manage ANAF connections** and connect the primary authorization with your qualified certificate. To use another certificate authorization, add a named connection, link an entity to it, then choose Connect for that connection. The first linked entity supplies its access-check identifier. Each entity can be reassigned in its Settings page.
 
-Do not run the diagnostic CLI listener at the same time: it uses the same callback port. HTTP port 3100 redirects to the HTTPS application when the HTTPS override is enabled. Health checks remain available internally over HTTP.
+Do not run the diagnostic CLI listener at the same time: it uses the same callback port. HTTP port 3100 is used only inside the container for health checks; Docker exposes the HTTPS listener.
 
 On Linux, the web container runs as UID 1000; ensure it can read the mounted TLS files without making the private key publicly readable. For other hosting environments, terminate HTTPS at a reverse proxy and set the public URL and registered callback to your own exact HTTPS origin. Native Node hosting supports `APP_TLS_CERT_FILE`, `APP_TLS_KEY_FILE`, and `APP_TLS_PORT`.
 

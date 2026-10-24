@@ -8,12 +8,14 @@ x-app-environment: &app-environment
     ANAF_MOCK_URL: http://anaf-mock:8790
     ANAF_CLIENT_ID: ${ANAF_CLIENT_ID:-}
     ANAF_CLIENT_SECRET: ${ANAF_CLIENT_SECRET:-}
-    ANAF_REDIRECT_URI: ${ANAF_REDIRECT_URI:-https://localhost:8765/callback}
+    ANAF_REDIRECT_URI: ${ANAF_REDIRECT_URI:-}
     ANAF_TOKEN_ENCRYPTION_KEY: ${ANAF_TOKEN_ENCRYPTION_KEY:-}
     DATABASE_URL: postgres://efactura:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@database:5432/efactura
     APP_DATABASE_NAME: ${APP_DATABASE_NAME:-efactura}
     DATA_DIR: /app/data
-    APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3100}
+    APP_PUBLIC_URL: ${APP_PUBLIC_URL:-}
+    APP_REQUIRE_HTTPS: 'true'
+    APP_TLS_PORT: &tls-port ${APP_TLS_PORT:-8765}
     APP_SESSION_SECRET: ${APP_SESSION_SECRET:?Set APP_SESSION_SECRET in .env}
     EMAIL_ENABLED: ${EMAIL_ENABLED:-true}
     EMAIL_FROM: ${EMAIL_FROM:-eFactura Manager <invoices@example.test>}
@@ -67,9 +69,16 @@ services:
         restart: unless-stopped
     web:
         image: *app-image
-        environment: *app-environment
         ports:
-            - "127.0.0.1:3100:3100"
+            - target: *tls-port
+              published: *tls-port
+              host_ip: 127.0.0.1
+        volumes:
+            - ./.local/tls:/app/tls:ro
+        environment:
+            <<: *app-environment
+            APP_TLS_CERT_FILE: /app/tls/localhost.pem
+            APP_TLS_KEY_FILE: /app/tls/localhost-key.pem
         depends_on:
             database:
                 condition: service_healthy
