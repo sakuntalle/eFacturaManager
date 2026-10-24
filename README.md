@@ -43,7 +43,9 @@ Release images use `ghcr.io/sakuntalle/efactura-manager:<version>`. Each release
 
     In Windows PowerShell, use `New-Item -ItemType Directory -Force .local/admin` instead.
 
-6. Pull the release, initialize its database and create the administrator:
+6. Create locally trusted certificates at `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem` using the [local HTTPS setup](docs/local-https.md).
+
+7. Pull the release, initialize its database and create the administrator:
 
     ```sh
     docker compose --env-file .env -f compose.release.yaml pull
@@ -52,42 +54,38 @@ Release images use `ghcr.io/sakuntalle/efactura-manager:<version>`. Each release
     docker compose --env-file .env -f compose.release.yaml up -d
     ```
 
-7. Open <http://localhost:3100>, sign in as `admin` with the generated password in `.local/admin/README.md`, and change it when prompted. The local test email inbox is available at <http://localhost:8025>.
+8. Open <https://localhost:8765>, sign in as `admin` with the generated password in `.local/admin/README.md`, and change it when prompted. The local test email inbox is available at <http://localhost:8025>.
 
 The Compose installation runs five services: the web application, background worker, PostgreSQL database, simulated ANAF provider and Mailpit test inbox. PostgreSQL and simulator data live in named Docker volumes, so rebuilding, upgrading, stopping or recreating containers preserves them. `docker compose down` retains this data; `docker compose down -v` permanently deletes it and should only be used when intentionally resetting the installation.
 
-The default release starts in safe simulator mode over HTTP. A live ANAF connection requires locally trusted certificates and the exact registered HTTPS callback, normally `https://localhost:8765/callback`. Download `compose.https.yaml`, complete the [live ANAF setup](docs/live-connection.md), and then start the release with both Compose files:
-
-```sh
-docker compose --env-file .env -f compose.release.yaml -f compose.https.yaml up -d
-```
-
-Open <https://localhost:8765> for the live installation. Keep `.env`, `.local`, database backups and encryption keys private. The complete platform-specific setup and upgrade instructions are in the [Docker Desktop installation guide](docs/docker-desktop.md).
+The default release starts in safe simulator mode over HTTPS. Create locally trusted certificates before starting it; the exact callback for a live ANAF connection is normally `https://localhost:8765/callback`. Complete the [live ANAF setup](docs/live-connection.md). Keep `.env`, `.local`, database backups and encryption keys private. The complete platform-specific setup and upgrade instructions are in the [Docker Desktop installation guide](docs/docker-desktop.md).
 
 For source development, see [docs/development.md](docs/development.md).
 
 ## Build the current source with Docker
 
+Before the first launch, follow the [local HTTPS setup](docs/local-https.md) to create and trust `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem`. Existing HTTP installations must also update `APP_PUBLIC_URL` and `APP_TLS_PORT` as described there.
+
 ```sh
 npm ci
 docker compose --env-file .env.example up -d database
-DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
+DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=https://localhost:8765 npm run admin:bootstrap
 docker compose --env-file .env.example up --build -d
 ```
 
 This explicitly uses the supplied local development configuration, avoiding any existing live credentials in `.env`.
 
-- Application: <http://localhost:3100>
+- Application: <https://localhost:8765>
 - Sign in: username `admin`; read the unique 12-character temporary password in `.local/admin/README.md`
 - Local email inbox (Mailpit): <http://localhost:8025>
 
-The commands above intentionally use the public mock configuration and its HTTP endpoint. They are not suitable for completing a live ANAF authorization. ANAF redirects the browser to the exact callback registered for the OAuth application, including its scheme and port. When that callback is `https://localhost:8765/callback`, build and start an existing local HTTPS installation with both Compose files:
+The commands above intentionally use the mock provider. ANAF redirects the browser to the exact callback registered for the OAuth application, including its scheme and port. The standard Docker stack always uses HTTPS and can receive the normal `https://localhost:8765/callback` callback:
 
 ```sh
-docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --build
+docker compose --env-file .env -f compose.yaml up -d --build
 ```
 
-Then open <https://localhost:8765>. Always include `compose.https.yaml` when rebuilding or recreating this installation. Omitting it starts only the base HTTP configuration, which cannot receive the registered HTTPS callback. The command preserves the existing PostgreSQL and mock-data volumes; do not add `-v` when stopping the stack unless you intend to delete them.
+Then open <https://localhost:8765>. The command preserves the existing PostgreSQL and mock-data volumes; do not add `-v` when stopping the stack unless you intend to delete them.
 
 The bootstrap command creates the one administrator account in PostgreSQL and writes its initial password to the local, Git-ignored README with owner-only file permissions. It generates the password once for a new database; rerunning the command leaves an existing account unchanged. The first login requires a password change before any workspace page or API can be used. After that change, the app opens **Manage ANAF connections**. A fresh workspace has no entities or connections: create a connection, add a company or individual linked to it, then authorize it in live mode. Existing installations retain their entities and connections. Use the same bootstrap command with your local `.env` when upgrading an existing installation. Never copy the local password README into a public repository.
 
@@ -102,7 +100,7 @@ npm run db:create -- efactura_onboarding
 The command creates and initializes the named database on the local PostgreSQL server and writes its one-time administrator password to `.local/admin/efactura_onboarding/README.md`. It refuses to overwrite an existing database. Change `APP_DATABASE_NAME=efactura_onboarding` in `.env`, then apply the selection to both services:
 
 ```sh
-docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --no-deps --force-recreate web worker
+docker compose --env-file .env -f compose.yaml up -d --no-deps --force-recreate web worker
 ```
 
 Open the normal <https://localhost:8765> site and sign in with the new database's administrator password. The frontend, URL, ANAF callback and PostgreSQL volume stay the same; accounts, entities, invoices, sessions and saved ANAF connections belong to the selected database. To return to the original workspace, set `APP_DATABASE_NAME=efactura` and run the same Compose command. Neither switch deletes a database. For native development, `APP_DATABASE_NAME` selects the database in `DATABASE_URL` as well. Keep only one web/worker pair active for a selected database.
@@ -176,10 +174,10 @@ After saving `.env`, run `npm run email:test` from the project directory. It sen
 Apply the configuration to the running HTTPS deployment (the worker sends the emails):
 
 ```sh
-docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --no-deps web worker
+docker compose --env-file .env -f compose.yaml up -d --no-deps web worker
 ```
 
-Mailpit is optional when `SMTP_HOST` points to an external provider. Once real delivery works, stop its local container with `docker compose --env-file .env -f compose.yaml -f compose.https.yaml stop mailpit`.
+Mailpit is optional when `SMTP_HOST` points to an external provider. Once real delivery works, stop its local container with `docker compose --env-file .env -f compose.yaml stop mailpit`.
 
 Then create a new simulated invoice in the Mocked ANAF tab. Emails are labeled **[SIMULATED ANAF]** and link back to the app. Set `APP_PUBLIC_URL` to the address the recipient can actually reach. A localhost link is usable only on the machine hosting the app.
 
@@ -214,7 +212,7 @@ Verify the local Docker stack (not your real SMTP configuration):
 
 ```sh
 docker compose --env-file .env.example up -d database
-DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
+DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=https://localhost:8765 npm run admin:bootstrap
 docker compose --env-file .env.example up --build -d
 npm run test:admin
 npm run test:reset
@@ -223,7 +221,7 @@ npm run test:connection
 npm run test:browser
 ```
 
-The isolated admin, entity and connection tests use temporary databases and do not change the running app's credentials or invoice data. All Playwright browser tests use controlled API responses and run without an administrator password; they do not change the running app's entities or invoices. For the normal HTTPS app, run `PLAYWRIGHT_BASE_URL=https://localhost:8765 npm run test:browser`. The optional `test:integration` uses the local mock stack and requires `TEST_ADMIN_PASSWORD` to be set to its current administrator password. Browser tests use installed Google Chrome through Playwright; alternatively set `PLAYWRIGHT_CHANNEL=chromium` and install Playwright's Chromium.
+The isolated admin, entity and connection tests use temporary databases and do not change the running app's credentials or invoice data. All Playwright browser tests use controlled API responses and run without an administrator password; they do not change the running app's entities or invoices. For the normal HTTPS app, run `PLAYWRIGHT_BASE_URL=https://localhost:8765 npm run test:browser`. The optional `test:integration` uses the local mock stack over HTTPS and requires `TEST_ADMIN_PASSWORD` to be set to its current administrator password. Configure Node certificate trust and an optional custom `TEST_APP_URL` using the [integration test instructions](docs/local-https.md#trust-https-in-the-local-integration-test). Browser tests use installed Google Chrome through Playwright; alternatively set `PLAYWRIGHT_CHANNEL=chromium` and install Playwright's Chromium.
 
 ## Architecture
 
@@ -277,7 +275,7 @@ PostgreSQL stores parsed invoice details and the original ZIP and generated PDF 
 
 Administrator sessions are stored in PostgreSQL as token hashes with server-side expiry, behind a replaceable session-store contract. The current worker processes one job at a time per queue; jobs have a five-minute execution timeout. The ZIP is stored before committing its invoice/outbox record; a crash can leave an orphan document row, which a subsequent sync reuses. Full archival completeness, long-running job heartbeats and packaged backup/upgrade tooling are future work.
 
-To diagnose failures, run `docker compose --env-file .env -f compose.yaml -f compose.https.yaml logs --tail 200 web worker`. Structured JSON log entries show the module, failing stage, a stable opaque entity reference, and allowlisted HTTP, database or network codes. The selected entity’s reference appears in Settings. Logs omit raw ANAF responses, OAuth values, invoice contents, fiscal identifiers and SMTP error text. Successful syncs log their imported invoice count and duration.
+To diagnose failures, run `docker compose --env-file .env -f compose.yaml logs --tail 200 web worker`. Structured JSON log entries show the module, failing stage, a stable opaque entity reference, and allowlisted HTTP, database or network codes. The selected entity’s reference appears in Settings. Logs omit raw ANAF responses, OAuth values, invoice contents, fiscal identifiers and SMTP error text. Successful syncs log their imported invoice count and duration.
 
 For cloud hosting later, substitute managed storage/queue adapters and add deployment-specific HTTPS, secret management and monitoring. Windows/Linux Docker compatibility follows the Linux-container packaging, but those host systems have not yet been separately exercised.
 

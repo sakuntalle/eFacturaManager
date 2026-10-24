@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
+import { integrationOrigin } from './integration-target.mjs';
 
 // Explicitly target the local development stack. Never reads real SMTP credentials.
-const origin = 'http://localhost:3100';
+// Node verifies TLS using its normal trust store and NODE_EXTRA_CA_CERTS.
+const origin = integrationOrigin();
 let cookie = '';
 async function api(path, body) {
     const response = await fetch(`${origin}/api/${path}`, {

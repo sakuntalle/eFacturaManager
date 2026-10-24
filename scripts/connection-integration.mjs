@@ -13,9 +13,11 @@ import { Sessions } from '../dist/server/app/sessions.js';
 import { connectionFailureMessage } from '../dist/server/app/connection-errors.js';
 import { AnafConnection } from '../dist/server/app/connection.js';
 import { passwordHash } from '../dist/server/app/admin-auth.js';
+import { integrationOrigin } from './integration-target.mjs';
 
-const origin = 'https://localhost:9876';
-const ca = await readFile(join(execFileSync('mkcert', ['-CAROOT'], { encoding: 'utf8' }).trim(), 'rootCA.pem'));
+const origin = integrationOrigin({ TEST_APP_URL: 'https://localhost:9876' });
+const caFile = join(execFileSync('mkcert', ['-CAROOT'], { encoding: 'utf8' }).trim(), 'rootCA.pem');
+const ca = await readFile(caFile);
 const sourceUrl = new URL('postgres://efactura:local-development@127.0.0.1:55432/efactura');
 const databaseName = `efactura_connection_${randomBytes(6).toString('hex')}`;
 const testUrl = new URL(sourceUrl);
@@ -80,6 +82,11 @@ try {
         await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert.ok(ready, 'Test app must start');
+    execFileSync(process.execPath, ['--input-type=module', '-e', `
+        import { integrationOrigin } from './scripts/integration-target.mjs';
+        const response = await fetch(new URL('/api/health', integrationOrigin()));
+        if (!response.ok || !(await response.json()).ok) process.exit(1);
+    `], { env: { ...env, TEST_APP_URL: origin, NODE_EXTRA_CA_CERTS: caFile }, stdio: 'pipe', timeout: 10000 });
     assert.equal(await repo.createAdmin(passwordHash(initialPassword)), true);
     const initialLogin = await request('/api/login', { method: 'POST', body: { username: 'admin', password: initialPassword } });
     assert.equal(initialLogin.status, 201);
@@ -114,7 +121,14 @@ try {
         await page.goto(origin);
         await page.getByLabel('Username', { exact: true }).fill('admin');
         await page.getByLabel('Password', { exact: true }).fill(initialPassword);
+        const browserLogin = page.waitForResponse(response => new URL(response.url()).pathname === '/api/login');
         await page.getByRole('button', { name: /Sign in/ }).click();
+        const loginResponse = await browserLogin;
+        assert.equal(loginResponse.status(), 201, 'HTTPS browser login must pass the backend origin check');
+        assert.equal(loginResponse.request().headers().origin, origin, 'Browser must send the configured HTTPS origin');
+        const sessionCookies = (await page.context().cookies()).filter(item => item.name === 'efactura_session');
+        assert.equal(sessionCookies.length, 1);
+        assert.equal(sessionCookies[0].secure, true, 'HTTPS login must create a Secure session cookie');
         await page.getByRole('heading', { name: 'Change your temporary password' }).waitFor();
         await page.getByLabel('Current password').fill(initialPassword);
         await page.getByLabel('New password', { exact: true }).fill(changedPassword);
