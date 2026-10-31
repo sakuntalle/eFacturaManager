@@ -1,5 +1,3 @@
-import type { AnafMode } from './config.js';
-
 export type InvoiceData = {
     number: string; issueDate: string; dueDate: string; supplier: string;
     supplierCif: string; currency: string; net: string; tax: string; total: string;
@@ -16,7 +14,7 @@ export type InvoicePage = { items: Invoice[]; total: number; allTotal: number; p
 export type Company = {
     id: string; workspaceId: string; cif: string; name: string; kind: 'company' | 'individual';
     connectionId: string;
-    emailTo: string; emailEnabled: boolean; mode: AnafMode; environment: 'prod' | 'test';
+    emailTo: string; emailEnabled: boolean; mode: 'live'; environment: 'prod';
     pollSeconds: number; lastSync: string | null; nextSync: string;
     syncError: string | null; initialized: boolean;
 };
@@ -76,7 +74,7 @@ export interface AnafGateway {
 }
 
 export type ConnectionStatus = {
-    state: 'mock' | 'needs_entity' | 'unconfigured' | 'disconnected' | 'connected' | 'reconnect_required';
+    state: 'needs_entity' | 'unconfigured' | 'disconnected' | 'connected' | 'reconnect_required';
     canConnect: boolean;
     connectedAt: string | null;
 };

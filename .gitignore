@@ -1,5 +1,6 @@
 .env
 .env.*
+code-review.csv
 !.env.example
 !.env.release.example
 .local/

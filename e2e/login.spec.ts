@@ -20,7 +20,7 @@ test('login sends the remember-me choice and sign-out returns to the login page'
             return route.fulfill({ json: { ok: true } });
         }
         if (path === '/api/status') {
-            return route.fulfill({ json: { company: null, companies: [], connections: [], mode: 'mock',
+            return route.fulfill({ json: { company: null, companies: [], connections: [], mode: 'live',
                 emailEnabled: false, emailTo: '', diagnosticRef: null,
                 connection: { state: 'needs_entity', canConnect: false, connectedAt: null } } });
         }

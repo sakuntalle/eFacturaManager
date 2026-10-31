@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Company, Event, Invoice, InvoicePage, InvoiceSort, ManagedConnection, SortDirection } from '../../app/contracts.js';
-import { mockInvoiceInput } from '../../app/mock/invoice-input.js';
+import { defaultSmtpSettings, publicSmtp, type SmtpInput } from '../../app/smtp-settings.js';
 import { ThemeProvider, ThemeSwitch } from './theme.js';
 import { InvoiceDetails } from './invoice-details.js';
 import { formatAddedDate, formatAppDateTime, formatInvoiceDate } from './invoice-date.js';
@@ -10,8 +10,8 @@ import { connectionFailureMessage } from '../../app/connection-errors.js';
 import { ResizableHeader, ResizableTable } from './resizable-table.js';
 import './style.css';
 
-type Status = { company: Company | null; companies: Company[]; mode: 'mock' | 'live'; emailEnabled: boolean; emailTo: string;
-    diagnosticRef: string | null; connection: ConnectionStatus; connections?: ManagedConnection[] };
+type Status = { company: Company | null; companies: Company[]; emailEnabled: boolean; emailTo: string;
+    smtp?: ReturnType<typeof publicSmtp>; diagnosticRef: string | null; connection: ConnectionStatus; connections?: ManagedConnection[] };
 type AdminSession = { username: string; mustChangePassword: boolean };
 type View = { tab: string; companyId: string; addConnectionId: string };
 const connectionColumns = [
@@ -44,7 +44,7 @@ const date = (value: string | null) => value ? formatAppDateTime(value) : 'Not y
 function connectionLabel(connection: ConnectionStatus) {
     return connection.state === 'connected' ? 'Connected' : connection.state === 'reconnect_required' ? 'Reconnect required'
         : connection.state === 'needs_entity' ? 'Add an entity first' : connection.state === 'unconfigured' ? 'Server setup required'
-            : connection.state === 'mock' ? 'Simulated' : 'Disconnected';
+            : 'Disconnected';
 }
 const syncQueuedNotice = 'Synchronization queued. The worker will pick it up shortly.';
 const connectionSyncNotice = 'ANAF connected. Initial synchronization will start shortly.';
@@ -160,53 +160,33 @@ function EntityForm({ initial, connections, creating, busy, onSave }: { initial:
         <button className="primary" disabled={busy}>{creating ? 'Add entity' : 'Save entity settings'}</button>
     </form>;
 }
-function SimulatedInvoiceForm({ companyId, onCancel, onCreated }: { companyId: string; onCancel: () => void; onCreated: (number: string) => void }) {
-    const dialog = useRef<HTMLDialogElement>(null);
-    const supplierInput = useRef<HTMLInputElement>(null);
-    const submitting = useRef(false);
-    const [supplierName, setSupplierName] = useState('');
-    const [amountRon, setAmountRon] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState('');
-    useEffect(() => {
-        const element = dialog.current!;
-        const previousFocus = document.activeElement;
-        element.showModal();
-        supplierInput.current?.focus();
-        return () => {
-            element.close();
-            if (previousFocus instanceof HTMLElement) previousFocus.focus();
-        };
-    }, []);
-    async function submit(event: React.FormEvent) {
-        event.preventDefault();
-        if (submitting.current) return;
-        submitting.current = true;
-        setBusy(true); setError('');
-        try {
-            const input = mockInvoiceInput({ supplierName, amountRon });
-            const result = await api<{ created: { number: string } }>('mock', { action: 'invoice', ...input }, companyId);
-            onCreated(result.created.number);
-        } catch (e) {
-            setError(e instanceof Error ? e.message === 'SIGN_IN' ? 'Your session expired. Sign in again to create an invoice.' : e.message : 'Could not create the invoice.');
-        } finally { submitting.current = false; setBusy(false); }
-    }
-    return <dialog ref={dialog} className="invoice-dialog" aria-labelledby="invoice-form-title" onCancel={e => {
-        e.preventDefault();
-        if (!submitting.current) onCancel();
-    }}>
-        <form onSubmit={submit}>
-            <span className="mode mock">Simulated ANAF data</span>
-            <h2 id="invoice-form-title">Create simulated invoice</h2>
-            <p>The invoice number is assigned automatically.</p>
-            <label>Supplier name<input ref={supplierInput} required maxLength={200} value={supplierName} onChange={e => { setSupplierName(e.target.value); setError(''); }} disabled={busy} /></label>
-            <label>Amount (RON)<input required inputMode="decimal" placeholder="e.g. 250,00" value={amountRon} onChange={e => { setAmountRon(e.target.value); setError(''); }} disabled={busy} aria-describedby="invoice-amount-help" /></label>
-            <p id="invoice-amount-help" className="muted">Invoice amount, with up to two decimal places. VAT is zero for this simulated invoice.</p>
-            {error && <div className="alert error" role="alert">{error}</div>}
-            <div className="dialog-actions"><button type="button" className="secondary" onClick={onCancel} disabled={busy}>Cancel</button>
-                <button type="submit" className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create invoice'}</button></div>
-        </form>
-    </dialog>;
+function SmtpForm({ settings, busy, onSave }: { settings: ReturnType<typeof publicSmtp>; busy: boolean;
+    onSave: (input: SmtpInput) => Promise<void> }) {
+    const [draft, setDraft] = useState({ ...settings, password: '' });
+    useEffect(() => setDraft({ ...settings, password: '' }), [settings.host, settings.port, settings.secure,
+        settings.requireTLS, settings.user, settings.from, settings.hasPassword]);
+    return <form onSubmit={event => { event.preventDefault(); void onSave({ host: draft.host, port: draft.port,
+        secure: draft.secure, requireTLS: draft.requireTLS, user: draft.user, from: draft.from,
+        ...(draft.password ? { password: draft.password } : {}) }).then(() =>
+            setDraft(current => ({ ...current, password: '' }))); }}>
+        <label>SMTP host<input required maxLength={253} value={draft.host} disabled={busy}
+            onChange={event => setDraft({ ...draft, host: event.target.value })} /></label>
+        <label>SMTP port<input type="number" required min={1} max={65535} value={draft.port} disabled={busy}
+            onChange={event => setDraft({ ...draft, port: Number(event.target.value) })} /></label>
+        <label>Sender email<input required maxLength={320} value={draft.from} disabled={busy}
+            onChange={event => setDraft({ ...draft, from: event.target.value })} /></label>
+        <label>SMTP username<input autoComplete="off" maxLength={254} value={draft.user} disabled={busy}
+            onChange={event => setDraft({ ...draft, user: event.target.value })} /></label>
+        <label>SMTP password<input type="password" autoComplete="new-password" maxLength={1024} value={draft.password}
+            required={!!draft.user && (!settings.hasPassword || draft.user !== settings.user)} disabled={busy}
+            onChange={event => setDraft({ ...draft, password: event.target.value })} /></label>
+        {settings.hasPassword && <p className="muted">Leave the password blank to keep the saved password.</p>}
+        <label className="checkbox-label"><input type="checkbox" checked={draft.secure} disabled={busy}
+            onChange={event => setDraft({ ...draft, secure: event.target.checked })} />Use implicit TLS</label>
+        <label className="checkbox-label"><input type="checkbox" checked={draft.requireTLS} disabled={busy}
+            onChange={event => setDraft({ ...draft, requireTLS: event.target.checked })} />Require STARTTLS</label>
+        <button className="primary" disabled={busy}>Save email settings</button>
+    </form>;
 }
 function DeleteEntityDialog({ company, onCancel, onDelete }: { company: Company; onCancel: () => void; onDelete: () => Promise<void> }) {
     const dialog = useRef<HTMLDialogElement>(null);
@@ -293,10 +273,6 @@ function App() {
     const [queuedSync, setQueuedSync] = useState<{ companyId: string; lastSync: string | null; nextSync: string } | null>(null);
     const [skipSetup, setSkipSetup] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [scenario, setScenario] = useState('normal');
-    const [showInvoiceForm, setShowInvoiceForm] = useState(false);
-    const [mockNotice, setMockNotice] = useState('');
-    const [mockError, setMockError] = useState('');
     async function load() {
         const requestedId = activeCompanyId.current;
         try {
@@ -331,13 +307,6 @@ function App() {
                 activeCompanyId.current = next.company.id;
                 setCompanyId(next.company.id);
                 localStorage.setItem('efactura-company', next.company.id);
-            }
-            if (next.mode !== 'mock') {
-                setTab(current => current === 'mock' ? 'inbox' : current);
-                setShowInvoiceForm(false); setMockNotice(''); setMockError('');
-            }
-            if (next.mode === 'mock') {
-                const mock = await api<{ scenario: string }>('mock', undefined, next.company.id); setScenario(mock.scenario);
             }
         } catch (e) {
             if (requestedId !== activeCompanyId.current) return;
@@ -455,14 +424,6 @@ function App() {
         setBusy(true); setError(''); setNotice('');
         try { await work(); setNotice(message); await load(); }
         catch (e) { setError(e instanceof Error ? e.message === 'SIGN_IN' ? 'Incorrect username or password, or session expired.' : e.message : 'Request failed.'); }
-        finally { setBusy(false); }
-    }
-    async function simulate(value: string) {
-        setBusy(true); setMockError(''); setMockNotice('');
-        try {
-            await api('mock', { action: 'scenario', value }, status?.company?.id);
-            setMockNotice('Simulator scenario updated.'); await load();
-        } catch (e) { setMockError(e instanceof Error ? e.message : 'Could not update the simulator.'); }
         finally { setBusy(false); }
     }
     if (authenticated === null && !error) return <><StandaloneThemeHeader />
@@ -592,17 +553,17 @@ function App() {
         setQueuedSync(null);
     }
     function viewAvailable(view: View) {
-        if (view.tab === 'connections' || view.tab === 'add') return true;
-        if (view.tab === 'mock' && workspace.mode !== 'mock') return false;
+        if (['connections', 'add', 'smtp'].includes(view.tab)) return true;
         return workspace.companies.some(company => company.id === view.companyId);
     }
     const previousView = [...viewHistory].reverse().find(viewAvailable);
     function viewLabel(view: View) {
         if (view.tab === 'connections') return 'ANAF connections';
+        if (view.tab === 'smtp') return 'Email settings';
         if (view.tab === 'add') return 'Add managed entity';
         const name = workspace.companies.find(company => company.id === view.companyId)?.name ?? 'Entity';
         const section = view.tab === 'inbox' ? 'Invoices' : view.tab === 'activity' ? 'Activity'
-            : view.tab === 'settings' ? 'Settings' : 'Mocked ANAF';
+            : 'Settings';
         return `${name} / ${section}`;
     }
     function showView(view: View) {
@@ -610,7 +571,6 @@ function App() {
         if (view.companyId !== activeCompanyId.current
             && workspace.companies.some(company => company.id === view.companyId)) selectCompany(view.companyId);
         setTab(view.tab);
-        if (view.tab !== 'mock') setMockNotice('');
         if (view.tab !== 'inbox') setSelectedId(null);
     }
     function navigate(nextTab: string, companyId = activeCompanyId.current, addConnectionId = newEntityConnectionId) {
@@ -639,21 +599,20 @@ function App() {
         && invoices.every(invoice => selectedInvoices.has(invoice.id));
     const selectedPdfPending = [...selectedInvoices.values()].some(pdfReady => !pdfReady);
     const connection = status?.connection;
-    const needsConnection = status?.mode === 'live' && connection && connection.state !== 'connected';
+    const needsConnection = connection && connection.state !== 'connected';
     const setup = needsConnection && currentCompany && !currentCompany.initialized && !skipSetup && tab === 'inbox';
     const failed = events.filter(e => e.status === 'failed').length;
     return <div className={`shell${tab === 'inbox' && selected ? ' has-details' : ''}`}>
-        {(notice || (tab === 'mock' && mockNotice)) && <div className="toast-stack">
+        {notice && <div className="toast-stack">
             {notice && <Toast message={notice} onDismiss={() => setNotice('')} />}
-            {tab === 'mock' && mockNotice && <Toast message={mockNotice} onDismiss={() => setMockNotice('')} />}
         </div>}
         <aside className="sidebar">
             <div className="brand"><span className="brand-icon">eF</span><div>eFactura<small>MANAGER</small></div></div>
             {(['company', 'individual'] as const).map(kind => <div key={kind} className="managed-group">
                 <div className="workspace-label">Managed {kind === 'company' ? 'companies' : 'individuals'}</div>
                 {status.companies.filter(company => company.kind === kind).map(company =>
-                    <button key={company.id} className={`nav entity-nav${tab !== 'add' && tab !== 'connections' && currentCompanyId === company.id ? ' active' : ''}`}
-                        aria-pressed={tab !== 'add' && tab !== 'connections' && currentCompanyId === company.id}
+                    <button key={company.id} className={`nav entity-nav${tab !== 'add' && tab !== 'connections' && tab !== 'smtp' && currentCompanyId === company.id ? ' active' : ''}`}
+                        aria-pressed={tab !== 'add' && tab !== 'connections' && tab !== 'smtp' && currentCompanyId === company.id}
                         onClick={() => navigate('inbox', company.id)}>
                         <span aria-hidden="true">{kind === 'company' ? '▦' : '♙'}</span>{company.name}</button>)}
                 {!status.companies.some(company => company.kind === kind) && <span className="nav-empty">None yet</span>}
@@ -666,18 +625,18 @@ function App() {
                     navigate('add', activeCompanyId.current, currentCompany?.connectionId ?? selectedNewEntityConnectionId);
                 }}>
                     <span aria-hidden="true">＋</span>Add managed entity</button>
+                <button className={`nav${tab === 'smtp' ? ' active' : ''}`} onClick={() => navigate('smtp')}>Email settings</button>
             </div>
             <div className="sidebar-bottom"><span className="avatar">AD</span><div>{username}<small>Administrator</small></div></div>
             <button className="signout" onClick={() => void action(async () => { await api('logout', {}); setAuthenticated(false); }, '')}>Sign out</button>
         </aside>
         <main className="main">
             <header className="topbar"><span>Workspace <span className="slash">/</span> {tab === 'connections' ? 'Manage ANAF connections'
-                : tab === 'add' || !currentCompany ? 'Add managed entity'
-                : `${currentCompany.name} / ${tab === 'inbox' ? 'Invoices' : tab === 'activity' ? 'Activity' : tab === 'mock' ? 'Mocked ANAF' : 'Settings'}`}</span>
+                : tab === 'smtp' ? 'Email settings' : tab === 'add' || !currentCompany ? 'Add managed entity'
+                : `${currentCompany.name} / ${tab === 'inbox' ? 'Invoices' : tab === 'activity' ? 'Activity' : 'Settings'}`}</span>
                 <ThemeSwitch /></header>
-            {tab !== 'add' && tab !== 'connections' && currentCompany && <nav className="entity-tabs" aria-label="Entity views">
-                {([['inbox', 'Invoices'], ['activity', 'Activity'], ['settings', 'Settings'],
-                    ...(status.mode === 'mock' ? [['mock', 'Mocked ANAF']] : [])]).map(([id, label]) =>
+            {tab !== 'add' && tab !== 'connections' && tab !== 'smtp' && currentCompany && <nav className="entity-tabs" aria-label="Entity views">
+                {([['inbox', 'Invoices'], ['activity', 'Activity'], ['settings', 'Settings']]).map(([id, label]) =>
                     <button key={id} className="entity-tab" aria-current={tab === id ? 'page' : undefined}
                         onClick={() => navigate(id)}>
                         {label}{id === 'inbox' && <span className="entity-tab-count">{invoiceTotal}</span>}
@@ -685,7 +644,12 @@ function App() {
             </nav>}
             <div className="content">
                 {previousView && <button className="context-back" onClick={goBack}>← Back to {viewLabel(previousView)}</button>}
-                {tab === 'connections' ? <>
+                {tab === 'smtp' ? <section className="card settings-card"><h1>Email settings</h1>
+                    <p>Configure the SMTP server shared by invoice notifications and password recovery.</p>
+                    {error && <div className="alert error" role="alert">{error}</div>}
+                    <SmtpForm settings={status.smtp ?? publicSmtp(defaultSmtpSettings())} busy={busy}
+                        onSave={value => action(() => api('settings/smtp', value), 'Email settings saved.')} />
+                </section> : tab === 'connections' ? <>
                     <section className="heading"><div><span className="eyebrow">WORKSPACE AUTHORIZATION</span>
                         <h1>Manage ANAF connections</h1>
                         <p>One certificate authorization can serve several entities. Assign each entity to the connection that can access its invoices.</p>
@@ -766,15 +730,15 @@ function App() {
                     <p>Loading invoices and activity…</p>
                 </section> : <>
                 <section className="heading"><div><span className="eyebrow">{tab === 'inbox' ? 'RECEIVED INVOICES' : 'WORKSPACE'}</span>
-                    <h1>{tab === 'inbox' ? 'Your invoice inbox' : tab === 'activity' ? 'Background activity' : tab === 'mock' ? 'Mocked ANAF' : 'Workspace settings'}</h1>
-                    <p>{tab === 'inbox' ? 'Automatically collected. Ready when you need them.' : tab === 'activity' ? 'Follow PDF generation and email delivery, including retries.' : tab === 'mock' ? 'Create test invoices, simulate service conditions and check notifications.' : 'Control synchronization and email delivery.'}</p></div>
+                    <h1>{tab === 'inbox' ? 'Your invoice inbox' : tab === 'activity' ? 'Background activity' : 'Workspace settings'}</h1>
+                    <p>{tab === 'inbox' ? 'Automatically collected. Ready when you need them.' : tab === 'activity' ? 'Follow PDF generation and email delivery, including retries.' : 'Control synchronization and email delivery.'}</p></div>
                     <button className="primary" disabled={busy || !!needsConnection} onClick={() => void action(async () => {
                         await api('sync', {}, currentCompanyId);
                         setQueuedSync({ companyId: currentCompanyId, lastSync: currentCompany.lastSync, nextSync: currentCompany.nextSync });
                     }, syncQueuedNotice)}>↻ Sync now</button>
                 </section>
                 {error && <div className="alert error" role="alert">{error}</div>}
-                {currentCompany.syncError && (status.mode !== 'mock' || tab === 'mock') && <div className="alert error">Last sync: {currentCompany.syncError}</div>}
+                {currentCompany.syncError && <div className="alert error">Last sync: {currentCompany.syncError}</div>}
                 {needsConnection && !setup && <div className="alert connection-alert" role="status">
                     <p>{connection.state === 'reconnect_required' ? 'ANAF authorization needs renewing.' : 'ANAF is not connected.'} Automatic collection is paused for this entity. Stored invoices remain available.</p>
                     <button className="secondary" onClick={() => navigate('connections')}>Manage ANAF connections</button>
@@ -862,40 +826,15 @@ function App() {
                         <hr /><button className="danger" disabled={busy} onClick={() => setDeleteTarget(currentCompany)}>Delete this {currentCompany.kind}</button>
                     </section>
                     <section className="card settings-card"><h2>Email transport</h2>
-                        <p>Outgoing SMTP credentials remain in the server configuration. Each entity has its own notification address above.</p>
+                        <p>Configure the shared SMTP server in Email settings. Each entity has its own notification address above.</p>
                     </section>
                 </div>}
-                {tab === 'mock' && status?.mode === 'mock' && <>
-                    <div className="alert mock-banner"><span className="mode mock">Simulated ANAF data</span><p>This workspace uses test invoices. Email notifications use your configured delivery settings.</p></div>
-                    {mockError && <div className="alert error" role="alert">{mockError}</div>}
-                    <div className="settings-grid"><section className="card settings-card"><h2>Try a new invoice</h2><p>Finish the initial sync, then create a new invoice to exercise collection, PDF generation and email delivery.</p>
-                    <button className="primary" disabled={busy || !currentCompany.initialized} onClick={() => setShowInvoiceForm(true)}>＋ Create simulated invoice</button>
-                    <hr /><h2>ANAF response scenario</h2><label>Simulate a service condition<select value={scenario} onChange={e => void simulate(e.target.value)} disabled={busy}>
-                        {[['normal','Normal operation'],['rate-limit','Rate limited (429)'],['server-error','Service unavailable (503)'],['unauthorized','Authorization expired (401)'],['invalid-zip','Invalid download response'],['pdf-error','PDF conversion unavailable']].map(([value,label]) => <option key={value} value={value}>{label}</option>)}
-                    </select></label><p className="muted">Return to normal operation to test recovery.</p></section>
-                    <section className="card settings-card"><h2>Mock invoice notifications</h2>
-                        <p>{status.emailEnabled ? `Email notifications are enabled for ${status.emailTo}.` : 'Email notifications are disabled.'}</p>
-                        <p>New invoices send an email after collection. The initial import does not send individual emails. Subjects begin with [SIMULATED ANAF].</p>
-                        <h2>Recent email notifications</h2>
-                        <ul className="notification-list">{events.filter(event => event.kind === 'invoice.email').slice(0, 5).map(event => <li key={event.id}>
-                            <div><b>{invoices.find(invoice => invoice.id === event.invoiceId)?.number ?? 'Invoice notification'}</b><small>{date(event.createdAt)}</small></div>
-                            <span className={`badge ${event.status}`}>{event.status === 'sent' ? 'Sent' : event.status}</span>
-                        </li>)}</ul>
-                        {!events.some(event => event.kind === 'invoice.email') && <p className="muted">No email notifications yet. Create an invoice after the initial sync to try one.</p>}
-                        <button className="secondary" onClick={() => navigate('activity')}>View delivery activity</button>
-                    </section></div>
-                </>}
                 </>}
                 <footer>eFactura Manager · © {new Date().getFullYear()} MD AI RESEARCH SRL <span>Original documents stored in your workspace · {currentCompany?.environment === 'prod' ? 'Production API environment' : 'ANAF test environment'}</span></footer>
             </div>
         </main>
         {tab === 'inbox' && !setup && !!invoices.length && <ViewportHorizontalScrollbar targetRef={invoiceTableScroll} />}
         {tab === 'inbox' && selected && currentCompany && <InvoiceDetails invoice={selected} companyId={currentCompany.id} onClose={() => setSelectedId(null)} />}
-        {showInvoiceForm && status.mode === 'mock' && currentCompany && <SimulatedInvoiceForm companyId={currentCompany.id} onCancel={() => setShowInvoiceForm(false)} onCreated={number => {
-            setShowInvoiceForm(false); setMockError('');
-            setMockNotice(`Simulated invoice ${number} created. Wait for the next poll or choose Sync now.`);
-            void load();
-        }} />}
         {deleteTarget && <DeleteEntityDialog company={deleteTarget} onCancel={() => setDeleteTarget(null)}
             onDelete={() => removeCompany(deleteTarget)} />}
     </div>;

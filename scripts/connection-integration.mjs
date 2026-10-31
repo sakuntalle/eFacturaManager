@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { request as httpsRequest, createServer } from 'node:https';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -18,14 +18,16 @@ import { integrationOrigin } from './integration-target.mjs';
 const origin = integrationOrigin({ TEST_APP_URL: 'https://localhost:9876' });
 const caFile = join(execFileSync('mkcert', ['-CAROOT'], { encoding: 'utf8' }).trim(), 'rootCA.pem');
 const ca = await readFile(caFile);
-const sourceUrl = new URL('postgres://efactura:local-development@127.0.0.1:55432/efactura');
+const sourceUrl = new URL(process.env.DATABASE_URL ?? 'postgres://efactura:local-development@127.0.0.1:55432/efactura');
 const databaseName = `efactura_connection_${randomBytes(6).toString('hex')}`;
 const testUrl = new URL(sourceUrl);
 testUrl.pathname = `/${databaseName}`;
 const databaseAdmin = new pg.Client({ connectionString: sourceUrl.toString() });
 await databaseAdmin.connect();
 await databaseAdmin.query(`CREATE DATABASE ${databaseName}`);
-const env = { ...process.env, ANAF_MODE: 'live', ANAF_ENV: 'test', ANAF_CIF: '9999999999876',
+const env = { ...process.env, ANAF_MODE: 'live', ANAF_ENV: 'prod', ANAF_CIF: '9999999999876',
+    DATA_DIR: '.local/connection-test/data', APP_SECRETS_DIR: `.local/connection-test/${databaseName}`,
+    APP_SESSION_SECRET: randomBytes(32).toString('base64'),
     APP_PUBLIC_URL: origin, PORT: '3199', APP_TLS_PORT: '9876', APP_TLS_CERT_FILE: '.local/tls/localhost.pem',
     APP_TLS_KEY_FILE: '.local/tls/localhost-key.pem', ANAF_CLIENT_ID: 'integration-private-id',
     ANAF_CLIENT_SECRET: 'integration-private-secret', ANAF_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
@@ -38,7 +40,7 @@ const setup = new pg.Client({ connectionString: env.DATABASE_URL });
 await setup.connect();
 try {
     await setup.query(`INSERT INTO managed_connections(id,workspace_id,mode,environment,name,data)
-        VALUES ($1,$2,$3,$4,$5,$6)`, [DEFAULT_CONNECTION_ID, WORKSPACE_ID, 'live', 'test',
+        VALUES ($1,$2,$3,$4,$5,$6)`, [DEFAULT_CONNECTION_ID, WORKSPACE_ID, 'live', 'prod',
         'Primary ANAF connection', { state: 'disconnected', encrypted: null, fingerprint: '', connectedAt: null }]);
 } finally { await setup.end(); }
 const firstCompany = await repo.createCompany({ name: 'Test company', kind: 'company', cif: env.ANAF_CIF,
@@ -135,6 +137,24 @@ try {
         await page.getByLabel('Confirm new password').fill(changedPassword);
         await page.getByRole('button', { name: 'Change password' }).click();
         await page.getByRole('heading', { name: 'Manage ANAF connections' }).waitFor();
+        await page.getByRole('button', { name: 'Email settings', exact: true }).click();
+        await page.getByLabel('SMTP host', { exact: true }).fill('smtp.example.test');
+        await page.getByLabel('Sender email').fill('sender@example.test');
+        await page.getByLabel('SMTP username').fill('synthetic-user');
+        await page.getByLabel('SMTP password').fill('synthetic-browser-password');
+        const smtpSaved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings/smtp');
+        await page.getByRole('button', { name: 'Save email settings' }).click();
+        assert.equal((await smtpSaved).status(), 201);
+        await page.getByText('Leave the password blank to keep the saved password.').waitFor();
+        assert.equal(await page.getByLabel('SMTP password').inputValue() === '', true);
+        assert.equal((await page.locator('body').innerText()).includes('synthetic-browser-password'), false);
+        await page.getByLabel('SMTP port').fill('465');
+        const smtpUpdated = page.waitForResponse(response => new URL(response.url()).pathname === '/api/settings/smtp');
+        await page.getByRole('button', { name: 'Save email settings' }).click();
+        assert.equal((await smtpUpdated).status(), 201);
+        const savedSmtp = await repo.smtpSettings();
+        assert.equal(savedSmtp.password === 'synthetic-browser-password', true);
+        assert.equal(savedSmtp.port, 465);
         await page.getByRole('button', { name: 'Manage ANAF connections' }).first().click();
         const outgoing = page.waitForResponse(response => /\/api\/anaf\/connections\/[^/]+\/connect$/.test(new URL(response.url()).pathname));
         const firstReturn = page.waitForResponse(async response => new URL(response.url()).pathname === '/api/status'
@@ -265,4 +285,5 @@ try {
     await Promise.all([repo.close(), otherRepo.close(), pool.end()]);
     await databaseAdmin.query(`DROP DATABASE IF EXISTS ${databaseName}`);
     await databaseAdmin.end();
+    await rm(env.APP_SECRETS_DIR, { recursive: true, force: true });
 }

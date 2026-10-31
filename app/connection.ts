@@ -55,7 +55,7 @@ export class AnafConnection {
     private attemptFingerprint: string;
     constructor(private cfg: Config, private store: ConnectionStore, private gateway: OAuthGateway = new LiveOAuthGateway(cfg)) {
         this.key = Buffer.from(cfg.oauth.encryptionKey, 'base64');
-        this.ready = cfg.mode === 'live' && !!cfg.oauth.clientId && !!cfg.oauth.clientSecret
+        this.ready = !!cfg.oauth.clientId && !!cfg.oauth.clientSecret
             && this.key.length === 32 && cfg.publicUrl.startsWith('https:')
             && cfg.oauth.redirectUri === `${cfg.publicUrl}/callback`;
         this.fingerprint = this.ready ? createHmac('sha256', this.key).update(JSON.stringify([
@@ -64,13 +64,12 @@ export class AnafConnection {
         this.attemptFingerprint = createHmac('sha256', cfg.sessionSecret).update(this.fingerprint).digest('hex');
     }
     async status(): Promise<ConnectionStatus> {
-        if (this.cfg.mode === 'mock') return { state: 'mock', canConnect: false, connectedAt: null };
         if (!this.ready) return { state: 'unconfigured', canConnect: false, connectedAt: null };
         const row = await this.store.connection();
         return { state: !row || row.state === 'disconnected' ? 'disconnected' : row.fingerprint === this.fingerprint ? row.state : 'reconnect_required',
             canConnect: true, connectedAt: row?.connectedAt ?? null };
     }
-    async available() { return ['mock', 'connected'].includes((await this.status()).state); }
+    async available() { return (await this.status()).state === 'connected'; }
     private seal(tokens: StoredTokens): string {
         const iv = randomBytes(12);
         const cipher = createCipheriv('aes-256-gcm', this.key, iv);

@@ -31,15 +31,6 @@ async function databaseAdmin() {
     return { source, client };
 }
 
-async function healthy() {
-    try {
-        const response = await fetch(`${FIRST_LOGIN_MOCK_ORIGIN}/api/health`, { signal: AbortSignal.timeout(1000) });
-        return response.ok;
-    } catch {
-        return false;
-    }
-}
-
 async function httpsHealthy(ca) {
     return new Promise(resolve => {
         const request = httpsRequest(`${FIRST_LOGIN_LIVE_ORIGIN}/api/health`, { ca }, response => {
@@ -54,13 +45,12 @@ async function httpsHealthy(ca) {
 
 async function start(mode) {
     if (await state()) throw new Error('Test instance already exists. Run npm run first-login:stop before starting a fresh one.');
-    if (await healthy()) throw new Error(`Port ${FIRST_LOGIN_HTTP_PORT} is already serving an application.`);
-    if (mode === 'live' && (!process.env.ANAF_CLIENT_ID || !process.env.ANAF_CLIENT_SECRET
-        || !process.env.ANAF_TOKEN_ENCRYPTION_KEY || !process.env.ANAF_CIF)) {
+    if (!process.env.ANAF_CLIENT_ID || !process.env.ANAF_CLIENT_SECRET) {
         throw new Error('Live ANAF OAuth configuration is incomplete in the local .env file.');
     }
-    const ca = mode === 'live' ? await readFile(join(execFileSync('mkcert', ['-CAROOT'],
-        { encoding: 'utf8' }).trim(), 'rootCA.pem')) : null;
+    const ca = await readFile(join(execFileSync('mkcert', ['-CAROOT'],
+        { encoding: 'utf8' }).trim(), 'rootCA.pem'));
+    if (await httpsHealthy(ca)) throw new Error('The first-login HTTPS port is already serving an application.');
     const { source, client } = await databaseAdmin();
     const databaseName = `${prefix}${randomBytes(6).toString('hex')}`;
     let child;
@@ -84,12 +74,12 @@ async function start(mode) {
         }
         let ready = false;
         for (let attempt = 0; attempt < 100; attempt++) {
-            if (await healthy() && (mode === 'mock' || await httpsHealthy(ca))) { ready = true; break; }
+            if (await httpsHealthy(ca)) { ready = true; break; }
             if (child.exitCode !== null) break;
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         if (!ready) throw new Error('Test instance did not become healthy.');
-        const origin = mode === 'live' ? FIRST_LOGIN_LIVE_ORIGIN : FIRST_LOGIN_MOCK_ORIGIN;
+        const origin = FIRST_LOGIN_LIVE_ORIGIN;
         await writeFile(stateFile, JSON.stringify({ databaseName, pid: child.pid, mode, origin }, null, 4),
             { mode: 0o600, flag: 'wx' });
         console.log(`First-login test instance is ready at ${origin}`);
@@ -125,6 +115,5 @@ async function stop() {
 
 const command = process.argv[2];
 if (command === 'start') await start('live');
-else if (command === 'start-mock') await start('mock');
 else if (command === 'stop') await stop();
-else throw new Error('Use start, start-mock or stop.');
+else throw new Error('Use start or stop.');

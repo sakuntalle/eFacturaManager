@@ -9,7 +9,6 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import type { Request, Response, NextFunction } from 'express';
 import { runtime } from './runtime.js';
 import { DEFAULT_CONNECTION_ID } from './adapters/postgres.js';
-import { mockInvoiceInput } from './mock/invoice-input.js';
 import { entityInput } from './entity-input.js';
 import type { ConnectionFailure } from './connection-errors.js';
 import { Sessions, SESSION_COOKIE } from './sessions.js';
@@ -18,12 +17,12 @@ import { diagnosticReference, logFailure, logInfo } from './diagnostics.js';
 import { PasswordResets } from './password-reset.js';
 import { SmtpNotificationChannel } from './adapters/email.js';
 import { bulkInvoiceIds, createInvoiceBundle } from './invoice-bundle.js';
+import { publicSmtp, smtpInput } from './smtp-settings.js';
 
 const app = await runtime().catch(error => { logFailure('web', 'startup', error); process.exit(1); });
 const bindingCookie = 'efactura_oauth';
 const bindingOptions = { httpOnly: true, secure: true, sameSite: 'lax' as const, path: '/callback' };
 const sessions = new Sessions(app.repo, app.cfg);
-const passwordResets = new PasswordResets(app.repo, new SmtpNotificationChannel(app.cfg), app.cfg.publicUrl);
 const attempts = new Map<string, { count: number; until: number }>();
 const resetAttempts = new Map<string, { count: number; until: number }>();
 function rateLimited(key: string, limit: number, duration: number): boolean {
@@ -37,7 +36,7 @@ function uuid(id: string) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new BadRequestException('Invalid identifier.');
     return id;
 }
-function operation(path: string): 'authentication' | 'connection' | 'companies' | 'invoices' | 'sync' | 'settings' | 'events' | 'mock' | 'other' {
+function operation(path: string): 'authentication' | 'connection' | 'companies' | 'invoices' | 'sync' | 'settings' | 'events' | 'other' {
     if (['/api/login', '/api/logout', '/api/session', '/api/password'].includes(path)
         || path.startsWith('/api/password-reset/')) return 'authentication';
     if (path.startsWith('/api/anaf/') || path.startsWith('/api/connections') || path === '/callback') return 'connection';
@@ -46,7 +45,6 @@ function operation(path: string): 'authentication' | 'connection' | 'companies' 
     if (path === '/api/sync') return 'sync';
     if (path === '/api/settings') return 'settings';
     if (path.startsWith('/api/events')) return 'events';
-    if (path === '/api/mock') return 'mock';
     return 'other';
 }
 @Controller('api')
@@ -63,7 +61,8 @@ class ApiController {
         const ipLimited = rateLimited(`ip:${req.ip ?? 'unknown'}`, 10, 60 * 60 * 1000);
         const emailLimited = !ipLimited && rateLimited(`email:${emailKey}`, 3, 60 * 60 * 1000);
         if (!ipLimited && !emailLimited) {
-            void passwordResets.request(email).catch(error => logFailure('web', 'password_reset_request', error,
+            void app.repo.smtpSettings().then(smtp => new PasswordResets(app.repo,
+                new SmtpNotificationChannel({ ...app.cfg, smtp }), app.cfg.publicUrl).request(email)).catch(error => logFailure('web', 'password_reset_request', error,
                 { operation: 'authentication' }));
         }
         return { message: 'If this email address is registered, a password reset link will be sent.' };
@@ -79,7 +78,8 @@ class ApiController {
         if (typeof body.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.token)) {
             res.status(400).json({ message: 'This reset link is invalid or has expired.' }); return;
         }
-        const completed = await passwordResets.complete(body.token, passwordHash(body.newPassword));
+        const completed = await new PasswordResets(app.repo, new SmtpNotificationChannel({ ...app.cfg,
+            smtp: await app.repo.smtpSettings() }), app.cfg.publicUrl).complete(body.token, passwordHash(body.newPassword));
         if (!completed) { res.status(400).json({ message: 'This reset link is invalid or has expired.' }); return; }
         res.clearCookie(SESSION_COOKIE, sessions.cookieOptions()).json({ ok: true });
     }
@@ -166,11 +166,13 @@ class ApiController {
         const connections = await Promise.all((await app.repo.managedConnections()).map(async managed => ({
             ...managed,
             status: managed.verificationCif ? await (await app.connectionFor(managed.id)).status()
-                : { state: app.cfg.mode === 'mock' ? 'mock' : 'needs_entity', canConnect: false, connectedAt: null },
+                : { state: 'needs_entity', canConnect: false, connectedAt: null },
         })));
+        const smtp = await app.repo.smtpSettings();
         return { company: company ?? null, companies, connections, diagnosticRef: company ? diagnosticReference(company.id) : null,
-            emailEnabled: company?.emailEnabled ?? false, emailTo: company?.emailTo ?? app.cfg.smtp.to,
-            mode: app.cfg.mode, connection: connections.find(item => item.id === company?.connectionId)?.status
+            emailEnabled: !!company?.emailEnabled && smtp.configured, emailTo: company?.emailTo ?? app.cfg.smtp.to,
+            smtp: publicSmtp(smtp),
+            connection: connections.find(item => item.id === company?.connectionId)?.status
                 ?? { state: 'needs_entity', canConnect: false, connectedAt: null } };
     }
     @Post('companies') async createCompany(@Body() body: Record<string, unknown>) {
@@ -264,36 +266,17 @@ class ApiController {
         await (await this.selected(companyId)).repo.updatePoll(body.pollSeconds!);
         return { saved: true };
     }
+    @Post('settings/smtp') async saveSmtp(@Body() body: Record<string, unknown>) {
+        let settings;
+        try { settings = smtpInput(body); }
+        catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid SMTP settings.'); }
+        await app.repo.saveSmtpSettings(settings);
+        return { saved: true };
+    }
     @Get('events') async events(@Query('companyId') companyId?: string) { return (await this.selected(companyId)).repo.events(); }
     @Post('events/:id/retry') async replay(@Param('id') id: string, @Query('companyId') companyId?: string) {
         if (!await (await this.selected(companyId)).repo.replayEvent(uuid(id))) throw new BadRequestException('Only failed or skipped events can be retried.');
         return { queued: true };
-    }
-    @Get('mock') async mockState(@Query('companyId') companyId?: string) { return this.mockRequest(undefined, companyId); }
-    @Post('mock') async mockControl(@Body() body: { action?: string; value?: string; supplierName?: unknown; amountRon?: unknown },
-        @Query('companyId') companyId?: string) {
-        if (!['invoice', 'scenario'].includes(body?.action ?? '')) throw new BadRequestException('Invalid mock action.');
-        if (body.action === 'invoice') {
-            try { return this.mockRequest({ action: 'invoice', ...mockInvoiceInput(body) }, companyId); }
-            catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid invoice details.'); }
-        }
-        if (body.action === 'scenario' && !['normal', 'rate-limit', 'server-error', 'unauthorized', 'invalid-zip', 'pdf-error'].includes(body.value ?? '')) throw new BadRequestException('Invalid scenario.');
-        return this.mockRequest(body, companyId);
-    }
-    private async mockRequest(body?: { action?: string; value?: string; supplierName?: unknown; amountRon?: unknown }, companyId?: string) {
-        if (app.cfg.mode !== 'mock') throw new NotFoundException();
-        const item = await this.selected(companyId);
-        const url = new URL('/control', app.cfg.mockUrl);
-        url.searchParams.set('cif', item.company.cif);
-        const response = await fetch(url, { method: body ? 'POST' : 'GET',
-            headers: { Authorization: 'Bearer mock-only-access-token', 'Content-Type': 'application/json' },
-            body: body ? JSON.stringify(body) : undefined, redirect: 'error', signal: AbortSignal.timeout(5000) });
-        if (!response.ok) {
-            logFailure('web', 'mock_control', new Error('Mock control failed.'),
-                { operation: 'mock', httpStatus: response.status });
-            throw new BadRequestException('Simulator control failed.');
-        }
-        return response.json();
     }
 }
 @Module({ imports: [ServeStaticModule.forRoot({ rootPath: resolve('dist/web'), exclude: ['/api/{*path}'] })], controllers: [ApiController] })
@@ -362,19 +345,22 @@ server.use(async (req: Request, res: Response, next: NextFunction) => {
         res.status(500).json({ message: 'Request failed. Please retry.' });
     }
 });
-await server.listen(app.cfg.port, '0.0.0.0');
-logInfo('web', 'started');
 let tlsServer: ReturnType<typeof createServer> | undefined;
-if (app.cfg.tls.certFile && app.cfg.tls.keyFile) {
+if (app.cfg.publicUrl.startsWith('https:')) {
     try {
-        const [cert, key] = await Promise.all([readFile(app.cfg.tls.certFile), readFile(app.cfg.tls.keyFile)]);
+        if (!app.cfg.tls.certFile || !app.cfg.tls.keyFile) {
+            throw new Error('HTTPS requires APP_TLS_CERT_FILE and APP_TLS_KEY_FILE.');
+        }
+        const [cert, key] = await Promise.all([readFile(app.cfg.tls.certFile!), readFile(app.cfg.tls.keyFile!)]);
+        await server.init();
         tlsServer = createServer({ cert, key, minVersion: 'TLSv1.2' }, server.getHttpAdapter().getInstance());
         await new Promise<void>((resolve, reject) => {
             tlsServer!.once('error', reject);
-            tlsServer!.listen(app.cfg.tls.port, '0.0.0.0', resolve);
+            tlsServer!.listen(app.cfg.port, '0.0.0.0', resolve);
         });
     } catch (error) { logFailure('web', 'https_startup', error); process.exit(1); }
-}
+} else await server.listen(app.cfg.port, '0.0.0.0');
+logInfo('web', 'started');
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
     tlsServer?.close();
     await server.close(); await app.queue.close(); await app.repo.close(); process.exit(0);

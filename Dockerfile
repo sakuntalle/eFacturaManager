@@ -12,7 +12,7 @@ FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts && mkdir -p /app/data /app/mock-data && chown -R node:node /app/data /app/mock-data
+RUN npm ci --omit=dev --ignore-scripts && mkdir -p /app/data /app/secrets && chown -R node:node /app/data /app/secrets
 COPY LICENSE README.md ./
 COPY --from=build /app/dist ./dist
 USER node

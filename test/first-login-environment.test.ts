@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { config } from '../app/config.js';
+import { config } from './helpers/config.js';
 import { AnafConnection, type ConnectionStore } from '../app/connection.js';
 import { isolatedEnvironment, FIRST_LOGIN_LIVE_ORIGIN, FIRST_LOGIN_MOCK_ORIGIN }
     from '../scripts/first-login-environment.mjs';
@@ -22,10 +22,7 @@ test('fresh-login live instance uses a separate database and its own HTTPS ANAF 
     assert.equal(live.EMAIL_ENABLED, 'false');
     assert.equal(base.ANAF_REDIRECT_URI, 'https://localhost:8765/callback',
         'The live installation callback must remain unchanged');
-    const mock = isolatedEnvironment(source, 'efactura_first_login_123456789abc', 'mock', base);
-    assert.equal(mock.ANAF_MODE, 'mock');
-    assert.equal(mock.APP_PUBLIC_URL, FIRST_LOGIN_MOCK_ORIGIN);
-    assert.equal(mock.APP_TLS_CERT_FILE, '');
+    assert.throws(() => isolatedEnvironment(source, 'efactura_first_login_123456789abc', 'mock', base), /must be live/);
 });
 
 test('new connection in the isolated live workspace is disconnected and can be authorized', async () => {

@@ -6,27 +6,27 @@ export const FIRST_LOGIN_LIVE_ORIGIN = `https://localhost:${FIRST_LOGIN_HTTPS_PO
 export const FIRST_LOGIN_MOCK_ORIGIN = `http://localhost:${FIRST_LOGIN_HTTP_PORT}`;
 
 export function isolatedEnvironment(source, databaseName, mode, baseEnv = process.env) {
-    if (mode !== 'live' && mode !== 'mock') throw new Error('First-login mode must be live or mock.');
+    if (mode !== 'live') throw new Error('First-login mode must be live.');
     const database = new URL(source);
     database.pathname = `/${databaseName}`;
-    const live = mode === 'live';
-    const publicUrl = live ? FIRST_LOGIN_LIVE_ORIGIN : FIRST_LOGIN_MOCK_ORIGIN;
+    const publicUrl = FIRST_LOGIN_LIVE_ORIGIN;
     return {
         ...baseEnv,
         DATABASE_URL: database.toString(),
         APP_DATABASE_NAME: databaseName,
         ADMIN_BOOTSTRAP_DIR: '.local/first-login-demo/admin',
         ANAF_MODE: mode,
-        ANAF_CIF: live ? baseEnv.ANAF_CIF : '12345678',
-        ANAF_MOCK_URL: 'http://127.0.0.1:8790',
+        ANAF_CIF: baseEnv.ANAF_CIF,
         ANAF_REDIRECT_URI: `${publicUrl}/callback`,
         APP_PUBLIC_URL: publicUrl,
         APP_SESSION_SECRET: randomBytes(32).toString('hex'),
         PORT: String(FIRST_LOGIN_HTTP_PORT),
-        APP_TLS_CERT_FILE: live ? '.local/tls/localhost.pem' : '',
-        APP_TLS_KEY_FILE: live ? '.local/tls/localhost-key.pem' : '',
+        APP_TLS_CERT_FILE: '.local/tls/localhost.pem',
+        APP_TLS_KEY_FILE: '.local/tls/localhost-key.pem',
         APP_TLS_PORT: String(FIRST_LOGIN_HTTPS_PORT),
         EMAIL_ENABLED: 'false',
         DATA_DIR: '.local/first-login-demo/data',
+        APP_SECRETS_DIR: '.local/first-login-demo/secrets',
+        ANAF_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     };
 }

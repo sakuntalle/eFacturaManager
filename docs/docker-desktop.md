@@ -6,9 +6,9 @@ This path runs a published image and does not require Git, Node.js or a source c
 
 1. Open the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest).
 2. Create an empty folder for the installation.
-3. Download `compose.release.yaml` and `env.release.example` from the release assets into that folder.
+3. Download `compose.yaml`, `compose.release.yaml` and `env.release.example` from the release assets into that folder. Keep both Compose files together; `compose.release.yaml` inherits shared service settings from `compose.yaml`.
 4. Rename `env.release.example` to `.env`. Release assets already contain the matching image version; for the first release this is `EFACTURA_VERSION=1.0.0` from tag `v1.0.0`.
-5. Replace `POSTGRES_PASSWORD` and `APP_SESSION_SECRET` with two different random values. This command prints one suitable value; run it twice and copy each result to the appropriate setting:
+5. Set `POSTGRES_PASSWORD` to a random value. The application generates and persists its session and encryption keys automatically. This command prints a suitable database password:
 
     ```sh
     docker run --rm node:24-alpine node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
@@ -43,9 +43,9 @@ docker compose --env-file .env -f compose.release.yaml --profile tools run --rm 
 docker compose --env-file .env -f compose.release.yaml up -d
 ```
 
-Open <https://localhost:8765> and sign in as `admin` with the temporary password stored in `.local/admin/README.md`. You must change it on first login. The included Mailpit inbox is at <http://localhost:8025>.
+Open <https://localhost:8765> and sign in as `admin` with the temporary password stored in `.local/admin/README.md`. You must change it on first login. Open **Email settings** to configure SMTP.
 
-The default installation uses simulated ANAF data and binds its ports to the current computer only. Add an ANAF connection and managed entity in the interface before synchronizing. Email delivery uses Mailpit until you configure a real SMTP provider.
+The installation binds its ports to the current computer only. Add an ANAF connection and managed entity, then authorize the connection before synchronizing. Email delivery remains disabled until SMTP is configured.
 
 Check service state with:
 
@@ -62,7 +62,7 @@ docker compose --env-file .env -f compose.release.yaml pull
 docker compose --env-file .env -f compose.release.yaml up -d
 ```
 
-Keep the same `.env`, database volume and `ANAF_TOKEN_ENCRYPTION_KEY` when upgrading. Review the release notes for migration or compatibility instructions.
+Keep the same `.env`, database volume and `app-secrets` volume when upgrading. Review the release notes for migration or compatibility instructions.
 
 ## Stop or remove
 
@@ -72,7 +72,7 @@ Stop the application while retaining all data:
 docker compose --env-file .env -f compose.release.yaml down
 ```
 
-Do not add `-v` unless you intentionally want to permanently delete the PostgreSQL and simulator volumes.
+Do not add `-v` unless you intentionally want to permanently delete the PostgreSQL and application-secrets volumes.
 
 ## HTTPS and live ANAF
 

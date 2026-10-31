@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { config } from '../app/config.js';
+import { config } from './helpers/config.js';
 import { Sessions, SESSION_COOKIE, SESSION_DURATION, REMEMBER_DURATION, sessionToken } from '../app/sessions.js';
 import type { SessionStore } from '../app/contracts.js';
 

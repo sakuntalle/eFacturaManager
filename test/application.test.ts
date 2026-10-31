@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipSync, strToU8 } from 'fflate';
-import { config } from '../app/config.js';
+import { config } from './helpers/config.js';
 import { sampleXml, samplePdf } from '../app/mock/fixtures.js';
 import { mockInvoiceInput } from '../app/mock/invoice-input.js';
 import { invoiceXml, parseInvoice } from '../app/invoice-xml.js';
@@ -11,15 +11,17 @@ import { AnafHttpError } from '../src/anaf.js';
 import { formatAddedDate, formatAppDateTime, formatInvoiceDate } from '../web/src/invoice-date.js';
 import type { Event, Invoice, Repository, JobQueue, InvoiceFiles, AnafGateway, NotificationChannel } from '../app/contracts.js';
 
-test('ANAF mode and SMTP are independent, and deployment OAuth credentials never enter mock configuration', () => {
-    const cfg = config({ ANAF_MODE: 'mock', ANAF_CLIENT_ID: 'live-id', ANAF_CLIENT_SECRET: 'live-secret', SMTP_HOST: 'smtp.example.com', EMAIL_ENABLED: 'true' });
-    assert.equal(cfg.oauth.clientId, '');
-    assert.equal(cfg.oauth.clientSecret, '');
-    assert.equal(cfg.emailEnabled, true);
-    assert.equal(cfg.smtp.host, 'smtp.example.com');
-    assert.equal(config({ ANAF_MODE: 'live', ANAF_CIF: '1234', EMAIL_ENABLED: 'false' }).emailEnabled, false);
-    assert.throws(() => config({ ANAF_MODE: 'typo' }));
-    assert.throws(() => config({ ANAF_MOCK_URL: 'https://outside.example' }));
+test('live configuration retains deployment credentials and requires SMTP to be configured in the app', () => {
+    const cfg = config({ ANAF_CLIENT_ID: 'test-id', ANAF_CLIENT_SECRET: 'test-secret',
+        SMTP_HOST: 'legacy.example.test', EMAIL_ENABLED: 'true', ANAF_MOCK_URL: 'https://outside.example' });
+    assert.equal(cfg.mode, 'live');
+    assert.equal(cfg.oauth.clientId === 'test-id', true);
+    assert.equal(cfg.oauth.clientSecret === 'test-secret', true);
+    assert.equal(cfg.emailEnabled, false);
+    assert.equal(cfg.smtp.configured, false);
+    assert.equal('mockUrl' in cfg, false);
+    assert.throws(() => config({ ANAF_MODE: 'mock' }), /Only live ANAF/);
+    assert.throws(() => config({ ANAF_MODE: 'typo' }), /Only live ANAF/);
 });
 
 test('archive parser preserves exact decimal strings, selects invoice XML and rejects entity declarations', async () => {

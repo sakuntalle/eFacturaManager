@@ -10,29 +10,26 @@ function invoice(supplier: string, number: string) {
         lines: [{ description: 'Test item', quantity: '1', amount: '1234.56' }] };
 }
 
-async function workspace(page: Page, mode: 'mock' | 'live') {
+async function workspace(page: Page) {
     let pollSeconds = 60;
     let lastSync: string | null = null;
-    let createdInvoice: ReturnType<typeof invoice> | null = null;
-    let synchronized = false;
-    let invoiceRequests = 0;
     const initialInvoice = invoice('Office supplier', 'TEST-1');
     const company = () => ({ id: companyId, connectionId, name: 'Test company', kind: 'company',
-        cif: '12345678', emailTo: 'developer@example.test', emailEnabled: true, mode,
+        cif: '12345678', emailTo: 'developer@example.test', emailEnabled: true, mode: 'live',
         environment: 'prod', initialized: true, pollSeconds, lastSync,
         nextSync: '2026-09-28T12:00:00Z', syncError: null });
     await page.route('**/api/**', async route => {
         const url = new URL(route.request().url());
         const path = url.pathname;
         if (path === '/api/session') return route.fulfill({ json: { username: 'admin', mustChangePassword: false } });
-        if (path === '/api/status') return route.fulfill({ json: { mode, company: company(), companies: [company()],
+        if (path === '/api/status') return route.fulfill({ json: { company: company(), companies: [company()],
             emailEnabled: true, emailTo: 'developer@example.test', diagnosticRef: null,
             connections: [{ id: connectionId, name: 'Test authorization', verificationCif: '12345678',
-                entityIds: [companyId], status: { state: mode === 'mock' ? 'mock' : 'connected',
+                entityIds: [companyId], status: { state: 'connected',
                     canConnect: false, connectedAt: null } }],
-            connection: { state: mode === 'mock' ? 'mock' : 'connected', canConnect: false, connectedAt: null } } });
+            connection: { state: 'connected', canConnect: false, connectedAt: null } } });
         if (path === '/api/invoices') {
-            const items = mode === 'mock' ? synchronized && createdInvoice ? [createdInvoice] : [] : [initialInvoice];
+            const items = [initialInvoice];
             const search = url.searchParams.get('search')?.toLowerCase() ?? '';
             const matches = items.filter(item => `${item.supplier} ${item.number}`.toLowerCase().includes(search));
             return route.fulfill({ json: { items: matches, total: matches.length, allTotal: items.length,
@@ -43,29 +40,17 @@ async function workspace(page: Page, mode: 'mock' | 'live') {
             pollSeconds = route.request().postDataJSON().pollSeconds;
             return route.fulfill({ json: company() });
         }
-        if (path === '/api/mock') {
-            if (route.request().method() === 'POST') {
-                const body = route.request().postDataJSON();
-                if (body.action === 'invoice') {
-                    invoiceRequests++;
-                    createdInvoice = invoice(body.supplierName, 'DEMO-0001');
-                    return route.fulfill({ json: { created: { number: createdInvoice.number } } });
-                }
-            }
-            return route.fulfill({ json: { scenario: 'normal' } });
-        }
         if (path === '/api/sync') {
-            synchronized = true;
             lastSync = '2026-09-28T12:00:01Z';
             return route.fulfill({ json: { ok: true } });
         }
         return route.fulfill({ json: [] });
     });
-    return { invoiceRequests: () => invoiceRequests, pollSeconds: () => pollSeconds };
+    return { pollSeconds: () => pollSeconds };
 }
 
 test('administrator can browse invoices, inspect details, change polling and use mobile layout', async ({ page }, info) => {
-    const state = await workspace(page, 'live');
+    const state = await workspace(page);
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -76,7 +61,7 @@ test('administrator can browse invoices, inspect details, change polling and use
     await expect(page.locator('.details .totals')).toContainText('Invoice amount 1234.56 RON');
     await page.getByRole('button', { name: 'Close invoice details' }).click();
     await page.screenshot({ path: info.outputPath('desktop.png'), fullPage: true });
-    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const interval = page.getByLabel('Polling interval (seconds)');
     await interval.fill('45');
     await page.getByRole('button', { name: 'Save entity settings' }).click();
@@ -94,7 +79,7 @@ test('administrator can browse invoices, inspect details, change polling and use
 });
 
 test('table columns can be resized and retain their widths across reloads', async ({ page }) => {
-    await workspace(page, 'live');
+    await workspace(page);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
 
@@ -142,47 +127,4 @@ test('table columns can be resized and retain their widths across reloads', asyn
 
     await expect.poll(() => page.evaluate(() => ['invoices', 'invoice-lines', 'activity', 'connections'].every(table =>
         localStorage.getItem(`efactura-manager:table-widths:${table}`) !== null))).toBe(true);
-});
-
-test('simulated invoice form supports cancellation, validation and custom invoice creation', async ({ page }, info) => {
-    const state = await workspace(page, 'mock');
-    await page.goto('/');
-    await page.getByRole('button', { name: /Mocked ANAF/ }).click();
-    const create = page.getByRole('button', { name: /Create simulated invoice/ });
-    const dialog = page.getByRole('dialog', { name: 'Create simulated invoice' });
-    await create.click();
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByLabel('Supplier name')).toBeFocused();
-    await dialog.getByRole('button', { name: 'Cancel' }).click();
-    await expect(dialog).not.toBeVisible();
-    await expect(create).toBeFocused();
-    expect(state.invoiceRequests()).toBe(0);
-    await create.click();
-    await page.keyboard.press('Escape');
-    await expect(dialog).not.toBeVisible();
-    await create.click();
-    const supplier = 'Browser & Supplies';
-    await dialog.getByLabel('Supplier name').fill(supplier);
-    await dialog.getByLabel('Amount (RON)').fill('0');
-    await page.getByRole('button', { name: 'Create invoice', exact: true }).click();
-    await expect(dialog.getByRole('alert')).toContainText('greater than zero');
-    expect(state.invoiceRequests()).toBe(0);
-    await dialog.getByLabel('Amount (RON)').fill('1234,56');
-    await expect(dialog.getByRole('alert')).not.toBeVisible();
-    await page.setViewportSize({ width: 390, height: 844 });
-    await expect(dialog).toBeInViewport();
-    await page.screenshot({ path: info.outputPath('invoice-form.png'), fullPage: true });
-    await dialog.getByRole('button', { name: 'Create invoice', exact: true }).click();
-    await expect(dialog).not.toBeVisible();
-    await expect(page.getByRole('status')).toContainText('Simulated invoice DEMO-0001 created');
-    expect(state.invoiceRequests()).toBe(1);
-    await page.getByRole('button', { name: /Sync now/ }).click();
-    await page.getByRole('navigation', { name: 'Entity views' }).getByRole('button', { name: 'Invoices' }).click();
-    const row = page.getByRole('row').filter({ hasText: supplier });
-    await expect(row).toBeVisible();
-    await expect(row).toContainText('1234.56 RON');
-    await row.getByRole('button').click();
-    await expect(page.locator('.details')).toContainText(supplier);
-    await expect(page.locator('.details .totals')).toContainText('Invoice amount 1234.56 RON');
-    await expect(row.getByRole('link', { name: 'PDF ↓' })).toBeVisible();
 });

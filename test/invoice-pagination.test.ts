@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type pg from 'pg';
-import { config } from '../app/config.js';
+import { config } from './helpers/config.js';
 import { PostgresRepository } from '../app/adapters/postgres.js';
 
 test('205 invoices remain reachable across all pages, including beyond the former 200-item limit', async () => {
@@ -24,7 +24,7 @@ test('205 invoices remain reachable across all pages, including beyond the forme
         requestedOffsets.push(offset);
         return { rows: matching.slice(offset, offset + 50) };
     } } as unknown as pg.Pool;
-    const repo = new PostgresRepository(config({ ANAF_MODE: 'mock' }),
+    const repo = new PostgresRepository(config({ ANAF_MODE: 'live' }),
         '00000000-0000-4000-8000-000000000001', pool);
     const pages = [];
     for (let page = 1; page <= 5; page++) pages.push(await repo.invoicePage('', 'added', 'desc', page, 50));
@@ -37,4 +37,6 @@ test('205 invoices remain reachable across all pages, including beyond the forme
     assert.equal(searched.total, 1);
     assert.equal(searched.allTotal, 205);
     assert.equal(searched.items[0].number, 'TEST-204');
+    assert.equal(searched.items[0].supplierCif, '12345678');
+    assert.equal('supplierCIF' in searched.items[0], false);
 });

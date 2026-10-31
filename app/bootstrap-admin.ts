@@ -2,9 +2,9 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PostgresRepository } from './adapters/postgres.js';
 import { ADMIN_USERNAME, passwordHash, temporaryPassword } from './admin-auth.js';
-import { config } from './config.js';
+import { initializedConfig } from './config.js';
 
-const repo = new PostgresRepository(config());
+const repo = new PostgresRepository(await initializedConfig());
 try {
     await repo.initialize();
     if (await repo.adminAccount()) {

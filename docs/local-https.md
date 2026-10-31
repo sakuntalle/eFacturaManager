@@ -37,28 +37,10 @@ An existing `APP_PUBLIC_URL=http://localhost:3100` overrides the new default. Do
 
 Each Compose file defines the default TLS port once and reuses it for the listener and published port. When `APP_PUBLIC_URL` is unset or empty, the app derives `https://localhost:<APP_TLS_PORT>`. When `ANAF_REDIRECT_URI` is unset or empty, it derives `<APP_PUBLIC_URL>/callback`. Explicit values in your `.env` override these derived URLs.
 
-Start the source stack with `docker compose up -d --build --wait`, or the release stack with `docker compose -f compose.release.yaml up -d --wait`. Open `APP_PUBLIC_URL`. Existing database volumes are preserved. Docker publishes only the TLS listener; the internal HTTP health-check listener is not accessible on host port 3100.
+Start the source stack with `docker compose up -d --build --wait`, or the release stack with `docker compose -f compose.release.yaml up -d --wait`. Open `APP_PUBLIC_URL`. Existing database volumes are preserved. Docker publishes only the TLS listener; health checks use HTTPS inside the container.
 
 Native Vite development can still use `APP_PUBLIC_URL=http://localhost:5173` without TLS certificate settings. Switch it back to the HTTPS origin before starting the Docker application. `APP_REQUIRE_HTTPS=true` is set internally by Compose for the web app and worker.
 
-## Trust HTTPS in the local integration test
+## Local HTTPS integration tests
 
-`npm run test:integration` targets `https://localhost:8765` by default. `TEST_APP_URL` can select a different local HTTPS origin. HTTP and remote targets are rejected. The test changes data and exercises email delivery: run it only against a separate simulator workspace with Mailpit and set `TEST_ADMIN_PASSWORD` to that test workspace's administrator password.
-
-Node must trust the same mkcert certificate authority as your browser. Set `NODE_EXTRA_CA_CERTS` before starting Node; TLS verification remains enabled.
-
-On macOS or Linux:
-
-```sh
-export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"
-npm run test:integration
-```
-
-On Windows PowerShell:
-
-```powershell
-$env:NODE_EXTRA_CA_CERTS = Join-Path (mkcert -CAROOT) 'rootCA.pem'
-npm run test:integration
-```
-
-Set `TEST_APP_URL=https://localhost:<port>` in the environment when using a custom port. Missing or untrusted certificates must fail verification; do not disable TLS verification to run this test.
+`npm run test:connection` builds an isolated test app on HTTPS port 9876 and a synthetic authorization provider on port 9877. It uses a temporary PostgreSQL database and intercepts all ANAF requests. Install and trust the mkcert certificates above, configure local PostgreSQL through DATABASE_URL in .env, then run the command. The test validates HTTPS using the local CA; its synthetic browser context handles local certificate trust independently.

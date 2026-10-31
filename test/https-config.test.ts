@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { config } from '../app/config.js';
+import { config as appConfig } from '../app/config.js';
 import { failureDetails } from '../app/diagnostics.js';
+
+// The refactored app requires explicit database and document storage settings.
+function config(env: NodeJS.ProcessEnv) {
+    return appConfig({ DATABASE_URL: 'postgres://localhost/efactura_test', DATA_DIR: '.local/test', ...env });
+}
 
 const docker = { APP_REQUIRE_HTTPS: 'true', APP_TLS_PORT: '8765' };
 const tls = { APP_TLS_CERT_FILE: 'test-cert.pem', APP_TLS_KEY_FILE: 'test-key.pem' };
@@ -19,6 +24,7 @@ test('Docker HTTPS origins match the listener port and accept custom TLS ports',
     const custom = config({ ...docker, ...tls, APP_TLS_PORT: '9876', APP_PUBLIC_URL: 'https://localhost:9876' });
     assert.equal(custom.publicUrl, 'https://localhost:9876');
     assert.equal(custom.tls.port, 9876);
+    assert.equal(custom.port, 9876);
     assert.throws(() => config({ ...docker, APP_PUBLIC_URL: 'https://localhost:9876' }), /must match APP_TLS_PORT/);
     assert.equal(config({ ...docker, APP_TLS_PORT: '443', APP_PUBLIC_URL: 'https://localhost' }).tls.port, 443);
 });
@@ -52,7 +58,10 @@ test('HTTPS deployment validation rejects invalid origins, ports and partial cer
 });
 
 test('native HTTP development remains available when HTTPS is not required', () => {
-    assert.equal(config({ APP_PUBLIC_URL: 'http://localhost:5173' }).publicUrl, 'http://localhost:5173');
+    const cfg = config({ APP_PUBLIC_URL: 'http://localhost:5173' });
+    assert.equal(cfg.publicUrl, 'http://localhost:5173');
+    assert.equal(cfg.port, 3100);
+    assert.equal(config({ APP_PUBLIC_URL: 'http://localhost:5173', PORT: '3201' }).port, 3201);
 });
 
 test('HTTPS startup diagnostics expose a fixed configuration code without echoing the configured URL', () => {
@@ -64,4 +73,14 @@ test('HTTPS startup diagnostics expose a fixed configuration code without echoin
         assert.ok(error instanceof Error);
         assert.equal(error.message.includes('private-value'), false);
     }
+});
+
+test('HTTPS configuration retains optional legacy secrets and explicit storage settings', () => {
+    const cfg = config(docker);
+    assert.equal(cfg.sessionSecret, '');
+    assert.equal(cfg.oauth.encryptionKey, '');
+    assert.equal(cfg.emailEnabled, false);
+    assert.equal(cfg.databaseUrl, 'postgres://localhost/efactura_test');
+    assert.throws(() => appConfig(docker), /DATABASE_URL/);
+    assert.throws(() => appConfig({ ...docker, DATABASE_URL: 'postgres://localhost/efactura_test' }), /DATA_DIR/);
 });

@@ -1,5 +1,5 @@
 import { AnafConnection } from './connection.js';
-import { config } from './config.js';
+import { initializedConfig } from './config.js';
 import { DEFAULT_CONNECTION_ID, PostgresRepository, WORKSPACE_ID } from './adapters/postgres.js';
 import { PostgresJobQueue } from './adapters/queue.js';
 import { LocalInvoiceFiles, PostgresInvoiceFiles } from './adapters/files.js';
@@ -9,7 +9,7 @@ import { invoiceXml, parseInvoice } from './invoice-xml.js';
 import { Workflows } from './workflows.js';
 
 export async function runtime() {
-    const cfg = config();
+    const cfg = await initializedConfig();
     const repo = new PostgresRepository(cfg);
     await repo.initialize();
     await repo.migrateLegacyFiles(async (company, messageId, kind) => {
@@ -32,8 +32,9 @@ export async function runtime() {
     const scope = async (id?: string) => {
         const company = id ? await repo.findCompany(id) : await repo.company();
         if (!company || company.mode !== cfg.mode || company.environment !== cfg.environment) throw new Error('Company not found.');
-        const scopedConfig = { ...cfg, cif: company.cif, smtp: { ...cfg.smtp, to: company.emailTo },
-            emailEnabled: company.emailEnabled };
+        const smtp = await repo.smtpSettings();
+        const scopedConfig = { ...cfg, cif: company.cif, smtp: { ...smtp, to: company.emailTo },
+            emailEnabled: company.emailEnabled && smtp.configured };
         const entityConnection = await connectionFor(company.connectionId);
         const companyRepo = repo.forCompany(company.id);
         const files = new PostgresInvoiceFiles(companyRepo);

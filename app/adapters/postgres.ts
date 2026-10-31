@@ -1,10 +1,11 @@
 import pg from 'pg';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, randomBytes, createHash, createCipheriv, createDecipheriv } from 'node:crypto';
 import type { Config } from '../config.js';
 import type { Company, Event, Invoice, InvoiceData, InvoicePage, InvoiceSort, Repository, SessionStore, SortDirection } from '../contracts.js';
 
 import type { ConnectionStore, ConnectionRecord, ConnectionTransaction, OAuthAttempt } from '../connection.js';
 import type { EntityInput } from '../entity-input.js';
+import { smtpInput, type SmtpInput, type SmtpSettings } from '../smtp-settings.js';
 
 export const WORKSPACE_ID = '00000000-0000-4000-8000-000000000001';
 export const DEFAULT_CONNECTION_ID = '00000000-0000-4000-8000-000000000002';
@@ -36,6 +37,9 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
             await client.query(`
                 CREATE TABLE IF NOT EXISTS app_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
                 CREATE TABLE IF NOT EXISTS workspaces (id uuid PRIMARY KEY, name text NOT NULL);
+                CREATE TABLE IF NOT EXISTS workspace_smtp (
+                    workspace_id uuid PRIMARY KEY REFERENCES workspaces(id), encrypted text NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS companies (
                     id uuid PRIMARY KEY, workspace_id uuid NOT NULL REFERENCES workspaces(id),
                     cif text NOT NULL, mode text NOT NULL, environment text NOT NULL,
@@ -148,11 +152,12 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
             await client.query('CREATE INDEX IF NOT EXISTS companies_connection_id_idx ON companies(connection_id)');
             await client.query('INSERT INTO app_migrations(version) VALUES (7) ON CONFLICT DO NOTHING');
             await client.query('INSERT INTO app_migrations(version) VALUES (8) ON CONFLICT DO NOTHING');
+            await client.query('INSERT INTO app_migrations(version) VALUES (9) ON CONFLICT DO NOTHING');
             await client.query('COMMIT');
         } catch (error) { await client.query('ROLLBACK'); throw error; }
         finally { client.release(); }
     }
-    async migrateLegacyFiles(readLegacy: (company: { mode: Config['mode']; environment: Config['environment']; cif: string },
+    async migrateLegacyFiles(readLegacy: (company: { mode: 'mock' | 'live'; environment: 'prod' | 'test'; cif: string },
         messageId: string, kind: 'zip' | 'pdf') => Promise<Buffer>) {
         const client = await this.pool.connect();
         let locked = false;
@@ -470,6 +475,48 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
     async replayEvent(id: string) {
         return (await this.pool.query(`UPDATE outbox SET published_at=NULL,status='pending',attempts=0,error=NULL
             WHERE id=$1 AND company_id=$2 AND status IN ('failed','skipped')`, [id, this.companyId])).rowCount === 1;
+    }
+    private smtpKey() {
+        const key = Buffer.from(this.cfg.oauth.encryptionKey, 'base64');
+        if (key.length !== 32) throw new Error('Initialize application secrets before configuring SMTP.');
+        return key;
+    }
+    private readSmtp(encrypted?: string): SmtpSettings {
+        if (!encrypted) return this.cfg.smtp;
+        try {
+            const [iv, tag, bytes] = encrypted.split('.').map(value => Buffer.from(value, 'base64'));
+            const decipher = createDecipheriv('aes-256-gcm', this.smtpKey(), iv!);
+            decipher.setAAD(Buffer.from(`smtp:${WORKSPACE}`));
+            decipher.setAuthTag(tag!);
+            const value = JSON.parse(Buffer.concat([decipher.update(bytes!), decipher.final()]).toString('utf8'));
+            return { ...this.cfg.smtp, ...smtpInput(value), password: value.password ?? '', configured: true };
+        } catch {
+            throw new Error('Stored SMTP settings could not be read. Restore the application secrets backup.');
+        }
+    }
+    async smtpSettings(): Promise<SmtpSettings> {
+        const { rows: [row] } = await this.pool.query('SELECT encrypted FROM workspace_smtp WHERE workspace_id=$1', [WORKSPACE]);
+        return this.readSmtp(row?.encrypted);
+    }
+    async saveSmtpSettings(input: SmtpInput) {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query('SELECT pg_advisory_xact_lock(81392004)');
+            const { rows: [row] } = await client.query('SELECT encrypted FROM workspace_smtp WHERE workspace_id=$1', [WORKSPACE]);
+            const current = this.readSmtp(row?.encrypted);
+            const password = input.password ?? (input.user === current.user ? current.password : '');
+            if (input.user && !password) throw new Error('Enter the SMTP password for this username.');
+            const iv = randomBytes(12);
+            const cipher = createCipheriv('aes-256-gcm', this.smtpKey(), iv);
+            cipher.setAAD(Buffer.from(`smtp:${WORKSPACE}`));
+            const bytes = Buffer.concat([cipher.update(JSON.stringify({ ...input, password }), 'utf8'), cipher.final()]);
+            const encrypted = [iv, cipher.getAuthTag(), bytes].map(value => value.toString('base64')).join('.');
+            await client.query(`INSERT INTO workspace_smtp(workspace_id,encrypted) VALUES ($1,$2)
+                ON CONFLICT(workspace_id) DO UPDATE SET encrypted=EXCLUDED.encrypted`, [WORKSPACE, encrypted]);
+            await client.query('COMMIT');
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
     }
     async adminAccount(): Promise<{ passwordHash: string; mustChangePassword: boolean } | null> {
         const { rows: [row] } = await this.pool.query(`SELECT password_hash,must_change_password

@@ -51,11 +51,15 @@ test('release publishes the environment template with a downloadable filename', 
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     const dockerGuide = readFileSync(new URL('../docs/docker-desktop.md', import.meta.url), 'utf8');
 
-    assert.match(workflow, /cp \.env\.release\.example env\.release\.example/);
+    assert.match(workflow, /cp \.env\.example env\.release\.example/);
+    assert.match(workflow, /^\s+compose\.yaml\s+\\$/m);
     assert.match(workflow, /^\s+env\.release\.example$/m);
     assert.doesNotMatch(workflow, /^\s+\.env\.release\.example$/m);
     assert.ok(readme.includes('`env.release.example`'));
     assert.ok(dockerGuide.includes('Rename `env.release.example` to `.env`'));
+    for (const documentation of [readme, dockerGuide]) {
+        assert.match(documentation, /download `compose\.yaml`, `compose\.release\.yaml` and `env\.release\.example`/i);
+    }
 });
 
 test('release requires curated versioned notes and preserves GitHub generated notes', () => {

@@ -82,7 +82,7 @@ test('admin manages separate ANAF connections and links a new entity without exp
     await expect(page.getByRole('button', { name: 'Back to ANAF connections' })).toBeVisible();
     await page.getByRole('button', { name: 'Activity' }).click();
     await expect(page.getByRole('button', { name: 'Back to Second company / Invoices' })).toBeVisible();
-    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(page.getByLabel('ANAF connection')).toHaveValue(secondaryId);
     await expect(page.getByRole('heading', { name: 'Connected to ANAF' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Back to Second company / Activity' }).click();

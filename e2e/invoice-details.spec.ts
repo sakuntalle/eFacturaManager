@@ -13,8 +13,8 @@ test('invoice details open on the right from a scrolled list and remain usable o
         const company = { id: '00000000-0000-4000-8000-000000000001', name: 'Test company', kind: 'company',
             cif: '12345678', emailTo: 'developer@example.test', emailEnabled: true,
             pollSeconds: 60, initialized: true, environment: 'prod', lastSync: null, syncError: null };
-        const json = path === '/api/status' ? { mode: 'mock', emailEnabled: true, emailTo: 'developer@example.test',
-            company, companies: [company], connection: { state: 'mock', canConnect: false, connectedAt: null } }
+        const json = path === '/api/status' ? { mode: 'live', emailEnabled: true, emailTo: 'developer@example.test',
+            company, companies: [company], connection: { state: 'connected', canConnect: false, connectedAt: null } }
             : path === '/api/invoices' ? { items: invoices, total: invoices.length, allTotal: invoices.length, page: 1, pageSize: 50 }
                 : path === '/api/mock' ? { scenario: 'normal' } : [];
         return route.fulfill({ json });
