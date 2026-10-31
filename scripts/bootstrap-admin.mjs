@@ -1,10 +1,10 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { config } from '../app/config.ts';
+import { initializedConfig } from '../app/config.ts';
 import { PostgresRepository } from '../app/adapters/postgres.ts';
 import { ADMIN_USERNAME, passwordHash, temporaryPassword } from '../app/admin-auth.ts';
 
-const repo = new PostgresRepository(config());
+const repo = new PostgresRepository(await initializedConfig());
 try {
     await repo.initialize();
     if (await repo.adminAccount()) {

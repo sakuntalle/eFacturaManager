@@ -1,30 +1,32 @@
-# Docker Compose v2.20+ HTTPS stack for the published release image.
-include:
-    - compose.yaml
+# HTTPS stack for the published release image, sharing service settings with compose.yaml.
+name: efactura-manager
 
 x-app-image: &app-image ghcr.io/sakuntalle/efactura-manager:${EFACTURA_VERSION:-latest}
 
 services:
+    database:
+        extends:
+            file: compose.yaml
+            service: database
     web:
+        extends:
+            file: compose.yaml
+            service: web
         build: !reset null
         image: *app-image
-        environment:
-            APP_PUBLIC_URL: ${APP_PUBLIC_URL:?Set APP_PUBLIC_URL in .env}
-            APP_TLS_PORT: ${APP_TLS_PORT:?Set APP_TLS_PORT in .env}
-            APP_TLS_CERT_FILE: /app/tls/localhost.pem
-            APP_TLS_KEY_FILE: /app/tls/localhost-key.pem
-        ports: !override
-            - "127.0.0.1:${APP_TLS_PORT}:${APP_TLS_PORT}"
-        healthcheck:
-            test: ["CMD-SHELL", "NODE_TLS_REJECT_UNAUTHORIZED=0 node -e \"fetch('https://127.0.0.1:' + process.env.APP_TLS_PORT + '/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
-        volumes:
-            - ./.local/tls:/app/tls:ro
     worker:
+        extends:
+            file: compose.yaml
+            service: worker
         build: !reset null
         image: *app-image
-        environment:
-            APP_PUBLIC_URL: ${APP_PUBLIC_URL:?Set APP_PUBLIC_URL in .env}
-            APP_TLS_PORT: ${APP_TLS_PORT:?Set APP_TLS_PORT in .env}
     admin-bootstrap:
+        extends:
+            file: compose.yaml
+            service: admin-bootstrap
         build: !reset null
         image: *app-image
+
+volumes:
+    database:
+    app-secrets:

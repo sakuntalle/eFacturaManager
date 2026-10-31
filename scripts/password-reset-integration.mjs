@@ -18,7 +18,7 @@ let query;
 try {
     await admin.query(`CREATE DATABASE ${name}`);
     const cfg = config({ ...process.env, DATABASE_URL: url.toString(), APP_DATABASE_NAME: name,
-        ANAF_MODE: 'mock', ANAF_CIF: '12345678', APP_PUBLIC_URL: 'https://localhost:8765' });
+        ANAF_MODE: 'live', ANAF_CIF: '12345678', APP_PUBLIC_URL: 'https://localhost:8765' });
     repo = new PostgresRepository(cfg);
     await repo.initialize();
     const originalPassword = 'original-admin-password';

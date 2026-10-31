@@ -27,11 +27,11 @@ try {
             PRIMARY KEY(workspace_id,mode,environment))`);
         await legacy.query('INSERT INTO workspaces(id,name) VALUES ($1,$2)', [WORKSPACE_ID, 'My workspace']);
         await legacy.query('INSERT INTO workspace_connections(workspace_id,mode,environment,data) VALUES ($1,$2,$3,$4)',
-            [WORKSPACE_ID, 'mock', process.env.ANAF_ENV ?? 'prod', legacyConnection]);
+            [WORKSPACE_ID, 'live', process.env.ANAF_ENV ?? 'prod', legacyConnection]);
     } finally { await legacy.end(); }
     process.env.DATABASE_URL = testUrl.toString();
     process.env.APP_DATABASE_NAME = databaseName;
-    process.env.ANAF_MODE = 'mock';
+    process.env.ANAF_MODE = 'live';
     process.env.ANAF_CIF = '12345678';
     app = await runtime();
     const first = await app.repo.createCompany({ name: 'First company', kind: 'company', cif: '12345678',
@@ -132,7 +132,7 @@ try {
     assert.equal((await firstRepo.company()).pollSeconds, first.pollSeconds);
     assert.equal((await secondRepo.company()).pollSeconds, 180);
     assert.equal((await app.scope(second.id)).cfg.smtp.to, 'new@example.org');
-    assert.equal((await app.connection.status()).state, 'mock');
+    assert.equal(await app.connection.available(), false, 'A synthetic legacy grant must never authorize live requests.');
     const db = new pg.Client({ connectionString: testUrl.toString() });
     await db.connect();
     try {

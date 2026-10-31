@@ -165,7 +165,7 @@ class ApiController {
         if (companyId && !company) throw new NotFoundException('Entity not found.');
         const connections = await Promise.all((await app.repo.managedConnections()).map(async managed => ({
             ...managed,
-            status: managed.verificationCIF ? await (await app.connectionFor(managed.id)).status()
+            status: managed.verificationCif ? await (await app.connectionFor(managed.id)).status()
                 : { state: 'needs_entity', canConnect: false, connectedAt: null },
         })));
         const smtp = await app.repo.smtpSettings();
@@ -194,7 +194,7 @@ class ApiController {
         let input;
         try { input = entityInput(body); }
         catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid entity settings.'); }
-        if (input.CIF !== item.company.CIF || input.kind !== item.company.kind) {
+        if (input.cif !== item.company.cif || input.kind !== item.company.kind) {
             throw new BadRequestException('Entity type and fiscal identifier cannot be changed after setup.');
         }
         const connectionId = body.connectionId === undefined ? item.company.connectionId : uuid(String(body.connectionId));
@@ -267,8 +267,10 @@ class ApiController {
         return { saved: true };
     }
     @Post('settings/smtp') async saveSmtp(@Body() body: Record<string, unknown>) {
-        try { await app.repo.saveSmtpSettings(smtpInput(body)); }
+        let settings;
+        try { settings = smtpInput(body); }
         catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid SMTP settings.'); }
+        await app.repo.saveSmtpSettings(settings);
         return { saved: true };
     }
     @Get('events') async events(@Query('companyId') companyId?: string) { return (await this.selected(companyId)).repo.events(); }

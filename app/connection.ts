@@ -40,7 +40,7 @@ export class LiveOAuthGateway implements OAuthGateway {
     refresh(token: string) {
         return getTokens(this.cfg.oauth, new URLSearchParams({ grant_type: 'refresh_token', refresh_token: token }));
     }
-    async verify(token: string) { await new AnafClient(token).list(this.cfg.CIF, 1); }
+    async verify(token: string) { await new AnafClient(this.cfg.environment, token).list(this.cfg.cif, 1); }
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export type ConnectionFailureReporter = (step: ConnectionFailure, status?: number) => void;
@@ -59,7 +59,7 @@ export class AnafConnection {
             && this.key.length === 32 && cfg.publicUrl.startsWith('https:')
             && cfg.oauth.redirectUri === `${cfg.publicUrl}/callback`;
         this.fingerprint = this.ready ? createHmac('sha256', this.key).update(JSON.stringify([
-            cfg.oauth.clientId, cfg.oauth.clientSecret, cfg.oauth.redirectUri, cfg.CIF,
+            cfg.oauth.clientId, cfg.oauth.clientSecret, cfg.oauth.redirectUri, cfg.cif, cfg.environment,
         ])).digest('hex') : '';
         this.attemptFingerprint = createHmac('sha256', cfg.sessionSecret).update(this.fingerprint).digest('hex');
     }

@@ -8,7 +8,7 @@ import { digits } from '../../src/anaf.ts';
 
 export class LocalInvoiceFiles implements InvoiceFiles {
     private root: string;
-    constructor(cfg: Config) { this.root = join(cfg.dataDir, cfg.mode, cfg.environment, cfg.cif); }
+    constructor(cfg: Pick<Config, 'dataDir' | 'cif'> & { mode: 'mock' | 'live'; environment: 'prod' | 'test' }) { this.root = join(cfg.dataDir, cfg.mode, cfg.environment, cfg.cif); }
     private path(id: string, kind: 'zip' | 'xml' | 'pdf') { return join(this.root, `${digits(id, 'Message ID')}.${kind}`); }
     async put(id: string, kind: 'zip' | 'xml' | 'pdf', data: Uint8Array) {
         await mkdir(this.root, { recursive: true, mode: 0o700 });

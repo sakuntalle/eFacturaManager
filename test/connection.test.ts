@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { config } from '../app/config.js';
+import { config } from './helpers/config.js';
 import { AnafConnection, type ConnectionRecord, type ConnectionStore, type ConnectionTransaction, type OAuthAttempt, type OAuthGateway } from '../app/connection.js';
 import { AnafHttpError, type Tokens } from '../src/anaf.js';
 
@@ -121,13 +121,11 @@ test('tampered ciphertext and configuration changes cannot reuse saved tokens', 
     await assert.rejects(f.connection.withAccessToken(async () => assert.fail()), /Connect to ANAF/);
     assert.equal((await f.connection.status()).state, 'reconnect_required');
 });
-test('mock and incomplete live deployments never authorize with a fallback token', async () => {
+test('incomplete live deployments never authorize with a legacy fallback token', async () => {
     const store = new MemoryStore();
-    for (const mode of ['mock', 'live'] as const) {
-        const connection = new AnafConnection(config({ ANAF_MODE: mode, ANAF_CIF: '12345', ANAF_ACCESS_TOKEN: 'old-token' }), store);
-        assert.equal((await connection.status()).state, mode === 'mock' ? 'mock' : 'unconfigured');
-        await assert.rejects(connection.begin('session'), /Connect to ANAF/);
-    }
+    const connection = new AnafConnection(config({ ANAF_CIF: '12345', ANAF_ACCESS_TOKEN: 'test-legacy-token' }), store);
+    assert.equal((await connection.status()).state, 'unconfigured');
+    await assert.rejects(connection.begin('session'), /Connect to ANAF/);
 });
 
 test('revoking an app session invalidates an outstanding authorization without disconnecting an existing grant', async () => {

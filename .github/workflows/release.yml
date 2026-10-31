@@ -100,7 +100,7 @@ jobs:
                   RELEASE_NOTES_FILE: ${{ steps.version.outputs.notes_file }}
               run: |
                   sed -i "s/^EFACTURA_VERSION=.*/EFACTURA_VERSION=$RELEASE_VERSION/" .env.example
-                  cp .env.example env.example
+                  cp .env.example env.release.example
                   gh release create "$RELEASE_TAG" \
                       --target "$GITHUB_SHA" \
                       --title "$RELEASE_TAG" \
@@ -108,4 +108,4 @@ jobs:
                       --notes "$(cat "$RELEASE_NOTES_FILE")" \
                       compose.yaml \
                       compose.release.yaml \
-                      env.example
+                      env.release.example

@@ -30,6 +30,7 @@
         "test:admin": "node --import tsx --env-file=.env scripts/admin-bootstrap-integration.mjs",
         "test:reset": "node --import tsx --env-file=.env scripts/password-reset-integration.mjs",
         "test:files": "node --import tsx --env-file=.env scripts/file-storage-integration.mjs",
+        "test:smtp": "node --import tsx --env-file=.env scripts/smtp-settings-integration.mjs",
         "admin:bootstrap": "node --import tsx --env-file-if-exists=.env scripts/bootstrap-admin.mjs",
         "db:create": "node --import tsx --env-file=.env scripts/create-database.mjs",
         "first-login:start": "node --env-file=.env scripts/first-login-demo.mjs start",

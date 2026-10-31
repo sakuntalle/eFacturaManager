@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AnafHttpError, AnafNetworkError } from '../src/anaf.ts';
+import { HttpsConfigurationError } from './config.js';
 
 type Context = {
     entityId?: string;
@@ -30,6 +31,9 @@ function safeContext(context: Context) {
 }
 
 export function failureDetails(error: unknown) {
+    if (error instanceof HttpsConfigurationError) {
+        return { category: 'configuration', configurationCode: error.code };
+    }
     const value = typeof error === 'object' && error !== null ? error as { code?: unknown; status?: unknown } : {};
     const code = typeof value.code === 'string' ? value.code : '';
     const httpStatus = error instanceof AnafHttpError && Number.isInteger(error.status)

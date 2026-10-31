@@ -16,16 +16,21 @@ const directory = await mkdtemp(join(tmpdir(), 'efactura-files-'));
 const admin = new pg.Client({ connectionString: sourceUrl.toString() });
 await admin.connect();
 let repo;
+let rootRepo;
 try {
     await admin.query(`CREATE DATABASE ${databaseName}`);
     const cfg = config({ ...process.env, DATABASE_URL: testUrl.toString(), APP_DATABASE_NAME: databaseName,
         DATA_DIR: directory,
-        ANAF_MODE: 'mock', ANAF_CIF: '12345678' });
+        ANAF_MODE: 'live', ANAF_CIF: '12345678' });
     repo = new PostgresRepository(cfg);
+    rootRepo = repo;
     await repo.initialize();
-    const first = await repo.company();
+    const connection = await repo.createManagedConnection('File storage test');
+    const first = await repo.createCompany({ name: 'First', kind: 'company', cif: '12345678',
+        emailTo: 'first@example.org', emailEnabled: false, pollSeconds: 60 }, connection.id);
+    repo = repo.forCompany(first.id);
     const second = await repo.createCompany({ name: 'Second', kind: 'company', cif: '87654321',
-        emailTo: 'second@example.org', emailEnabled: false, pollSeconds: 60 });
+        emailTo: 'second@example.org', emailEnabled: false, pollSeconds: 60 }, connection.id);
     const invoice = { number: 'TEST-1', issueDate: '2026-09-25', dueDate: '', supplier: 'Test supplier',
         supplierCif: '1234', currency: 'RON', net: '10.00', tax: '0.00', total: '10.00', lines: [] };
     await repo.insertInvoice('900001', invoice, false);
@@ -72,7 +77,7 @@ try {
         'A later startup restores a document missing after the first migration');
     console.log('PASS: interrupted migration resumes, ZIP/PDF bytes persist in PostgreSQL, and companies remain isolated.');
 } finally {
-    if (repo) await repo.close();
+    if (rootRepo) await rootRepo.close();
     await admin.query(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`);
     await admin.end();
     await rm(directory, { recursive: true, force: true });

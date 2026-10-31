@@ -16,13 +16,13 @@ export class SmtpNotificationChannel implements NotificationChannel {
         });
     }
     async send(invoice: Invoice, eventId: string) {
-        const prefix = this.cfg.mode === 'mock' ? '[SIMULATED ANAF] ' : '';
+        if (!this.cfg.smtp.configured) throw new Error('Configure SMTP before sending notifications.');
         try {
             const info = await this.transport.sendMail({
                 from: this.cfg.smtp.from, to: this.cfg.smtp.to,
                 messageId: `<${eventId}@efactura.local>`,
-                subject: `${prefix}New invoice${this.entityName ? ` for ${this.entityName}` : ''} ${invoice.number} — ${invoice.supplier}`,
-                text: `${prefix}A new invoice is available.${this.entityName ? `\nEntity: ${this.entityName}` : ''}\n\nSupplier: ${invoice.supplier}\nInvoice: ${invoice.number}\n`
+                subject: `New invoice${this.entityName ? ` for ${this.entityName}` : ''} ${invoice.number} — ${invoice.supplier}`,
+                text: `A new invoice is available.${this.entityName ? `\nEntity: ${this.entityName}` : ''}\n\nSupplier: ${invoice.supplier}\nInvoice: ${invoice.number}\n`
                     + `Issued: ${invoice.issueDate}\nInvoice amount: ${invoice.total} ${invoice.currency}\n\n`
                     + `${this.cfg.publicUrl}/?invoice=${invoice.id}${this.companyId ? `&companyId=${this.companyId}` : ''}\n`,
             });
@@ -33,6 +33,7 @@ export class SmtpNotificationChannel implements NotificationChannel {
         }
     }
     async sendPasswordReset(to: string, link: string) {
+        if (!this.cfg.smtp.configured) throw new Error('Configure SMTP before sending account recovery email.');
         try {
             const info = await this.transport.sendMail({
                 from: this.cfg.smtp.from, to,

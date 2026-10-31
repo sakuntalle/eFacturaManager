@@ -3,9 +3,8 @@
 [![CI](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml)
 [![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3_or_later-blue.svg)](LICENSE)
 
-A self-hosted TypeScript application for collecting and viewing Romanian e-Factura invoices. Development currently uses a local ANAF simulator. The React interface, NestJS API, PostgreSQL database, pg-boss workers, file storage and SMTP delivery are real components.
+A self-hosted TypeScript application for collecting and viewing Romanian e-Factura invoices. It connects to ANAF (Romania’s National Agency for Fiscal Administration), stores original invoices and generated PDFs in PostgreSQL, and sends email notifications through SMTP configured in the app.
 
-**ANAF mode and email delivery are independent.** `ANAF_MODE=mock` uses synthetic invoice data; it does not disable email. Point SMTP at a real provider to receive those notifications in a real inbox.
 
 ## Install a release (non-developers)
 
@@ -27,9 +26,9 @@ Release images use `ghcr.io/sakuntalle/efactura-manager:<version>`. Each release
 ### First installation
 
 1. Install and start Docker Desktop, or Docker Engine with Compose v2.
-2. Create an empty installation folder. From the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest), download `compose.release.yaml` and `env.release.example` into it.
+2. Create an empty installation folder. From the [latest release](https://github.com/sakuntalle/eFacturaManager/releases/latest), download `compose.yaml`, `compose.release.yaml` and `env.release.example` into it. Keep both Compose files together; the release configuration inherits the shared service settings from `compose.yaml`.
 3. Rename `env.release.example` to `.env`.
-4. Generate two different random values with the command below. Put one in `POSTGRES_PASSWORD` and the other in `APP_SESSION_SECRET` inside `.env`.
+4. Generate a random value with the command below and put it in `POSTGRES_PASSWORD` inside `.env`. The application generates its session and encryption keys automatically and stores them in the private `app-secrets` volume.
 
     ```sh
     docker run --rm node:24-alpine node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
@@ -43,7 +42,9 @@ Release images use `ghcr.io/sakuntalle/efactura-manager:<version>`. Each release
 
     In Windows PowerShell, use `New-Item -ItemType Directory -Force .local/admin` instead.
 
-6. Pull the release, initialize its database and create the administrator:
+6. Create locally trusted certificates at `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem` using the [local HTTPS setup](docs/local-https.md).
+
+7. Pull the release, initialize its database and create the administrator:
 
     ```sh
     docker compose --env-file .env -f compose.release.yaml pull
@@ -52,42 +53,48 @@ Release images use `ghcr.io/sakuntalle/efactura-manager:<version>`. Each release
     docker compose --env-file .env -f compose.release.yaml up -d
     ```
 
-7. Open <http://localhost:3100>, sign in as `admin` with the generated password in `.local/admin/README.md`, and change it when prompted. The local test email inbox is available at <http://localhost:8025>.
+8. Open <https://localhost:8765>, sign in as `admin` with the generated password in `.local/admin/README.md`, and change it when prompted. Configure outgoing email under **Email settings**.
 
-The Compose installation runs five services: the web application, background worker, PostgreSQL database, simulated ANAF provider and Mailpit test inbox. PostgreSQL and simulator data live in named Docker volumes, so rebuilding, upgrading, stopping or recreating containers preserves them. `docker compose down` retains this data; `docker compose down -v` permanently deletes it and should only be used when intentionally resetting the installation.
+The Compose installation runs three services: the web application, background worker and PostgreSQL database. PostgreSQL data and application secrets live in named Docker volumes, so rebuilding, upgrading, stopping or recreating containers preserves them. `docker compose down` retains this data; `docker compose down -v` permanently deletes it and should only be used when intentionally resetting the installation.
 
-The default release starts in safe simulator mode over HTTP. A live ANAF connection requires locally trusted certificates and the exact registered HTTPS callback, normally `https://localhost:8765/callback`. Download `compose.https.yaml`, complete the [live ANAF setup](docs/live-connection.md), and then start the release with both Compose files:
-
-```sh
-docker compose --env-file .env -f compose.release.yaml -f compose.https.yaml up -d
-```
-
-Open <https://localhost:8765> for the live installation. Keep `.env`, `.local`, database backups and encryption keys private. The complete platform-specific setup and upgrade instructions are in the [Docker Desktop installation guide](docs/docker-desktop.md).
+The release starts over HTTPS and waits for an authorized ANAF connection before collecting invoices. Create locally trusted certificates before starting it; the exact callback for a live ANAF connection is normally `https://localhost:8765/callback`. Complete the [live ANAF setup](docs/live-connection.md). Keep `.env`, `.local`, database backups and encryption keys private. The complete platform-specific setup and upgrade instructions are in the [Docker Desktop installation guide](docs/docker-desktop.md).
 
 For source development, see [docs/development.md](docs/development.md).
 
 ## Build the current source with Docker
 
+For an already configured checkout, use the startup helper for your platform:
+
+| Platform | Start command |
+| --- | --- |
+| macOS / Linux | `./scripts/start-stack.sh` |
+| Windows PowerShell | `.\scripts\start-stack.cmd` |
+| Windows Command Prompt | `scripts\start-stack.cmd` |
+
+Both helpers launch the HTTPS stack, reuse existing images and containers, wait for health checks, preserve existing volumes, and print the website address. On a fresh setup, Compose builds missing application images and pulls missing dependency images. Add `--build` after source changes to rebuild the application; `--no-build` explicitly prohibits building missing images. Docker must be running; neither helper requires Node.js or npm on the host. Windows requires Docker Desktop running Linux containers, with no Bash or WSL requirement. See the [platform startup instructions](docs/development.md#docker-development-build) for options and first-install prerequisites.
+
+Before the first launch, follow the [local HTTPS setup](docs/local-https.md) to create and trust `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem`. Existing HTTP installations must also update `APP_PUBLIC_URL` and `APP_TLS_PORT` as described there.
+
 ```sh
-npm ci
-docker compose --env-file .env.example up -d database
-DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
-docker compose --env-file .env.example up --build -d
+cp .env.example .env
+# Set POSTGRES_PASSWORD in .env before continuing.
+docker compose --env-file .env up -d database
+docker compose --env-file .env --profile tools run --rm admin-bootstrap
+docker compose --env-file .env up --build -d
 ```
 
-This explicitly uses the supplied local development configuration, avoiding any existing live credentials in `.env`.
+A fresh workspace starts empty. Add an ANAF connection and managed entity, then authorize it with your qualified certificate.
 
-- Application: <http://localhost:3100>
+- Application: <https://localhost:8765>
 - Sign in: username `admin`; read the unique 12-character temporary password in `.local/admin/README.md`
-- Local email inbox (Mailpit): <http://localhost:8025>
 
-The commands above intentionally use the public mock configuration and its HTTP endpoint. They are not suitable for completing a live ANAF authorization. ANAF redirects the browser to the exact callback registered for the OAuth application, including its scheme and port. When that callback is `https://localhost:8765/callback`, build and start an existing local HTTPS installation with both Compose files:
+ANAF redirects the browser to the exact callback registered for the OAuth application, including its scheme and port. The standard Docker stack always uses HTTPS and can receive the normal `https://localhost:8765/callback` callback:
 
 ```sh
-docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --build
+docker compose --env-file .env -f compose.yaml up -d --build
 ```
 
-Then open <https://localhost:8765>. Always include `compose.https.yaml` when rebuilding or recreating this installation. Omitting it starts only the base HTTP configuration, which cannot receive the registered HTTPS callback. The command preserves the existing PostgreSQL and mock-data volumes; do not add `-v` when stopping the stack unless you intend to delete them.
+Then open <https://localhost:8765>. The command preserves the existing PostgreSQL and application-secrets volumes; do not add `-v` when stopping the stack unless you intend to delete them.
 
 The bootstrap command creates the one administrator account in PostgreSQL and writes its initial password to the local, Git-ignored README with owner-only file permissions. It generates the password once for a new database; rerunning the command leaves an existing account unchanged. The first login requires a password change before any workspace page or API can be used. After that change, the app opens **Manage ANAF connections**. A fresh workspace has no entities or connections: create a connection, add a company or individual linked to it, then authorize it in live mode. Existing installations retain their entities and connections. Use the same bootstrap command with your local `.env` when upgrading an existing installation. Never copy the local password README into a public repository.
 
@@ -102,7 +109,7 @@ npm run db:create -- efactura_onboarding
 The command creates and initializes the named database on the local PostgreSQL server and writes its one-time administrator password to `.local/admin/efactura_onboarding/README.md`. It refuses to overwrite an existing database. Change `APP_DATABASE_NAME=efactura_onboarding` in `.env`, then apply the selection to both services:
 
 ```sh
-docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --no-deps --force-recreate web worker
+docker compose --env-file .env -f compose.yaml up -d --no-deps --force-recreate web worker
 ```
 
 Open the normal <https://localhost:8765> site and sign in with the new database's administrator password. The frontend, URL, ANAF callback and PostgreSQL volume stay the same; accounts, entities, invoices, sessions and saved ANAF connections belong to the selected database. To return to the original workspace, set `APP_DATABASE_NAME=efactura` and run the same Compose command. Neither switch deletes a database. For native development, `APP_DATABASE_NAME` selects the database in `DATABASE_URL` as well. Keep only one web/worker pair active for a selected database.
@@ -114,17 +121,16 @@ npm run build
 npm run first-login:start
 ```
 
-Open <https://localhost:9878>, sign in as `admin`, and read the generated temporary password in `.local/first-login-demo/admin/README.md`. This test instance starts with no managed entities or ANAF connections. It uses its own temporary PostgreSQL database, live ANAF mode and disabled email delivery. It does not start a worker, so it will not collect invoices automatically. To complete a real ANAF authorization, add `https://localhost:9878/callback` as another callback URL for your ANAF OAuth application; the normal app's `https://localhost:8765/callback` registration remains in place. When finished, run `npm run first-login:stop` to stop the test site and remove only its temporary database. Run `npm run first-login:start` again to repeat the flow with a fresh account. For a mock-only first-login test instead, use `npm run first-login:start:mock`, which opens <http://localhost:3201> and reports simulated ANAF access.
+Open <https://localhost:9878>, sign in as `admin`, and read the generated temporary password in `.local/first-login-demo/admin/README.md`. This test instance starts with no managed entities or ANAF connections. It uses its own temporary PostgreSQL database, live ANAF mode and disabled email delivery. It does not start a worker, so it will not collect invoices automatically. To complete a real ANAF authorization, add `https://localhost:9878/callback` as another callback URL for your ANAF OAuth application; the normal app's `https://localhost:8765/callback` registration remains in place. When finished, run `npm run first-login:stop` to stop the test site and remove only its temporary database. Run `npm run first-login:start` again to repeat the flow with a fresh account.
 
 Check **Remember me** at sign-in to stay signed in for 30 days on that browser. Unchecked, the cookie lasts for the browser session and access expires after eight hours. Sessions persist across application restarts. Signing out revokes that session; changing the administrator password revokes all existing sessions. Some browsers restore session cookies when restoring a previous browsing session.
 
-After adding a connection and a managed entity in mock mode, the first sync imports three synthetic invoices and generates their PDFs. Initial imports do **not** send individual invoice emails. In **Mocked ANAF**, choose **Create simulated invoice**, enter a supplier name and invoice amount in RON, and submit the form. Numbers increment automatically. Amounts accept a comma or dot and up to two decimal places; these custom simulated invoices use zero VAT. Then choose **Sync now** (or wait for the next scheduled poll). The invoice appears in the inbox, its PDF becomes available, and its notification arrives in Mailpit. Open **Activity** to inspect processing, retries and errors.
 
 This is a local-first development version. Published ports bind to loopback. Default database credentials and session secret are local development values; replace them before hosting elsewhere. One administrator manages multiple companies and individuals in one workspace. Each entity has its own invoice archive, polling schedule, notification address and job history. Viewer accounts are not implemented.
 
-The **Dark mode** switch is anchored in the top-right header on every page, including sign-in and account recovery. The invoice form inherits the main UI theme without its own switch. The initial theme follows your system preference; your selection is saved in this browser.
+The **Dark mode** switch is anchored in the top-right header on every page, including sign-in and account recovery. Entity and email settings inherit the main UI theme. The initial theme follows your system preference; your selection is saved in this browser.
 
-The sidebar always shows **Managed companies** and **Managed individuals**. Select an entity, then use the **Invoices**, **Activity** and **Settings** tabs above the main view. **Manage ANAF connections** lists authorizations, their status and linked entities; it can create another connection and open the entity form with that connection selected. **Add managed entity** opens the Company (CIF/CUI) or Individual (CNP) creation form, where the ANAF connection is selected. An entity’s connection can also be changed in its Settings. The **Mocked ANAF** tab appears only when `ANAF_MODE=mock` and groups simulator controls and recent notification statuses. The bottom-left profile identifies the administrator.
+The sidebar always shows **Managed companies** and **Managed individuals**. Select an entity, then use the **Invoices**, **Activity** and **Settings** tabs above the main view. **Manage ANAF connections** lists authorizations, their status and linked entities; it can create another connection and open the entity form with that connection selected. **Add managed entity** opens the Company (CIF/CUI) or Individual (CNP) creation form, where the ANAF connection is selected. An entity’s connection can also be changed in its Settings. The bottom-left profile identifies the administrator.
 
 The in-app **Back** button returns to the previous workspace view, including the selected entity and tab. It works when moving through sidebar items, entity tabs, connection links and the add-entity form.
 
@@ -176,10 +182,10 @@ After saving `.env`, run `npm run email:test` from the project directory. It sen
 Apply the configuration to the running HTTPS deployment (the worker sends the emails):
 
 ```sh
-docker compose --env-file .env -f compose.yaml -f compose.https.yaml up -d --no-deps web worker
+docker compose --env-file .env -f compose.yaml up -d --no-deps web worker
 ```
 
-Mailpit is optional when `SMTP_HOST` points to an external provider. Once real delivery works, stop its local container with `docker compose --env-file .env -f compose.yaml -f compose.https.yaml stop mailpit`.
+Mailpit is optional when `SMTP_HOST` points to an external provider. Once real delivery works, stop its local container with `docker compose --env-file .env -f compose.yaml stop mailpit`.
 
 Then create a new simulated invoice in the Mocked ANAF tab. Emails are labeled **[SIMULATED ANAF]** and link back to the app. Set `APP_PUBLIC_URL` to the address the recipient can actually reach. A localhost link is usable only on the machine hosting the app.
 
@@ -187,43 +193,28 @@ Then create a new simulated invoice in the Mocked ANAF tab. Emails are labeled *
 
 ## Run during development
 
-Requires Node.js 24+, npm and Docker. Code uses four spaces, recorded in `.editorconfig`.
+See [the development guide](docs/development.md) for native Node and Docker setup. Requires Node.js 24+, npm and Docker.
 
 ```sh
 npm ci
-docker compose --env-file .env.example up -d database mailpit
-```
-
-For native development copy the environment example to `.env`, set `SMTP_HOST=127.0.0.1`, and set `APP_PUBLIC_URL=http://localhost:5173`. Keep `ANAF_MOCK_URL=http://127.0.0.1:8790` and the default local database URL. If the full Docker stack is already running, stop only its application processes first:
-
-```sh
-docker compose stop web worker anaf-mock
-npm run dev
-```
-
-Open <http://localhost:5173>. Vite serves the frontend and proxies API calls; NestJS, the worker and simulator reload on source changes. Do not run the native and Docker workers against the same company simultaneously during development.
-
-Build and check:
-
-```sh
-npm run build
+npm run typecheck
 npm test
-```
-
-Verify the local Docker stack (not your real SMTP configuration):
-
-```sh
-docker compose --env-file .env.example up -d database
-DATABASE_URL=postgres://efactura:local-development@127.0.0.1:55432/efactura ANAF_MODE=mock ANAF_CIF=12345678 APP_PUBLIC_URL=http://localhost:3100 npm run admin:bootstrap
-docker compose --env-file .env.example up --build -d
-npm run test:admin
-npm run test:reset
-npm run test:entities
-npm run test:connection
+npm run build
 npm run test:browser
 ```
 
-The isolated admin, entity and connection tests use temporary databases and do not change the running app's credentials or invoice data. All Playwright browser tests use controlled API responses and run without an administrator password; they do not change the running app's entities or invoices. For the normal HTTPS app, run `PLAYWRIGHT_BASE_URL=https://localhost:8765 npm run test:browser`. The optional `test:integration` uses the local mock stack and requires `TEST_ADMIN_PASSWORD` to be set to its current administrator password. Browser tests use installed Google Chrome through Playwright; alternatively set `PLAYWRIGHT_CHANNEL=chromium` and install Playwright's Chromium.
+The browser suite uses controlled API responses and requires Chrome, or `PLAYWRIGHT_CHANNEL=chromium`. With local PostgreSQL configured through `DATABASE_URL` in `.env`, run:
+
+```sh
+npm run test:admin
+npm run test:reset
+npm run test:entities
+npm run test:files
+npm run test:smtp
+npm run test:connection
+```
+
+These integration checks use temporary databases and synthetic data. The connection test additionally requires the local mkcert certificates, builds the app and exercises real browser interactions against a local HTTPS authorization provider. It intercepts all ANAF requests and does not contact the real service.
 
 ## Architecture
 
@@ -231,12 +222,13 @@ The isolated admin, entity and connection tests use temporary databases and do n
 - `app/adapters/postgres.ts`: PostgreSQL schema/bootstrap migration and repository implementation. Invoice insertion and outbox creation share one transaction. Decimal amounts are preserved as strings in the invoice document.
 - `app/adapters/queue.ts`: pg-boss implementation, retries and dead-letter queues. Workspace queues carry a company ID on every job.
 - `app/workflows.ts`: synchronization, outbox publication and job execution. No SQL or pg-boss calls in business workflows.
-- `app/adapters/anaf.ts`: HTTP adapter using the same list/download client for mock and live endpoints.
+- `app/adapters/anaf.ts`: HTTP adapter for authorized ANAF list, download and PDF requests.
 - `app/adapters/files.ts`: local storage implementation, scoped by mode/environment/company.
 - `app/adapters/email.ts`: SMTP notification channel using Nodemailer.
 - `app/api.ts`: NestJS API with local administrator sessions and request-origin checks.
 - `app/worker.ts`: persistent job consumers and scheduler/outbox dispatcher.
-- `app/mock/`: separate ANAF HTTP simulator with persistent synthetic invoices and failure controls.
+- `app/secrets.ts`: persistent application keys shared by web and worker processes.
+- `app/smtp-settings.ts`: validation and public representation of SMTP settings.
 - `web/`: React interface, built into static files served by NestJS.
 
 A future database/queue combination needs implementations of the contracts, schema/data migrations and integration tests. The outbox does not rely on sharing a transaction with pg-boss, allowing a separate cloud queue later. No claim is made that an unimplemented database can be selected through configuration today.
@@ -247,21 +239,13 @@ Invoice IDs are unique per company, and a completed outbox event is not reproces
 
 Normal handler failures are retried by pg-boss; terminal failures also enter its dead-letter queue. The Activity screen replays failed application events as fresh queue jobs; it does not expose every provider-level DLQ operation. The default pg-boss retention policy applies to dead-letter messages. Historical success and failure records remain in the application outbox.
 
-## Simulator coverage
-
-Implemented endpoints: received-message listing, ZIP download and XML-to-PDF conversion. The ZIP contains a synthetic UBL-style invoice plus an explicitly invalid test signature. The PDF is generated locally and prominently labeled; it does not reproduce ANAF's layout. Fixtures are not claimed to pass CIUS-RO validation.
-
-The Mocked ANAF tab can simulate HTTP 429, HTTP 503, an expired authorization (401), an invalid download response with HTTP 200, or a PDF conversion failure. Switch back to normal to exercise recovery. The invalid-download scenario is observable when a new, uncollected invoice exists. PDF failure affects pending PDF jobs; already generated PDFs remain available.
-
-Mock mode uses a dedicated synthetic token and never forwards real ANAF tokens or client secrets to the simulator. Invoice data and files are separated by mode and fiscal identifier. The simulator seeds the original mock company; newly added mock entities begin empty and can receive simulated invoices. Its scenario selection resets to normal after restart.
-
 ## Live ANAF remains an integration milestone
 
-`ANAF_MODE=live` supports multiple in-app ANAF connections. Existing entities and the saved authorization remain linked to **Primary ANAF connection** after upgrade. Sign in as `admin`, change the temporary password if prompted, then open **Manage ANAF connections**. One connection can serve multiple entities when its certificate has access to their fiscal identifiers. To use another authorization, create a named connection, add or assign an entity to it, then connect through the browser with the appropriate certificate. The backend verifies access to the first linked fiscal identifier before saving that connection. Each entity’s first import suppresses individual invoice emails.
+The application supports multiple in-app ANAF connections. Existing entities and the saved authorization remain linked to **Primary ANAF connection** after upgrade. Sign in as `admin`, change the temporary password if prompted, then open **Manage ANAF connections**. One connection can serve multiple entities when its certificate has access to their fiscal identifiers. To use another authorization, create a named connection, add or assign an entity to it, then connect through the browser with the appropriate certificate. The backend verifies access to the first linked fiscal identifier before saving that connection. Each entity’s first import suppresses individual invoice emails.
 
 Connection status, Connect, Reconnect and Disconnect are under **Manage ANAF connections**, separate from entity Settings. Signing out ends only the browser session. Disconnect deletes that connection’s locally stored authorization and pauses collection for its linked entities; other connections continue working. It retains collected documents and does not revoke the grant at ANAF. A request already in flight may finish. Authorization failures display a reconnect prompt; temporary service errors retain the connection and retry.
 
-Each deployment needs its own registration. Deployment credentials stay in server configuration and are never included in the status API or UI. The client identifier necessarily appears in the browser's authorization redirect to ANAF; the secret never does. Access/refresh tokens are encrypted with AES-256-GCM in PostgreSQL using a separate deployment key. Back up that key securely alongside your normal backup process; losing it requires reconnecting. Refresh is serialized across web and worker processes, and rotated refresh tokens are saved atomically. Legacy app access-token/token-file settings are no longer used.
+Each deployment needs its own registration. Deployment credentials stay in server configuration and are never included in the status API or UI. The client identifier necessarily appears in the browser's authorization redirect to ANAF; the secret never does. Access/refresh tokens are encrypted with AES-256-GCM in PostgreSQL using a separate deployment key stored in the private application-secrets file. Back up the `app-secrets` volume (or native `.local/app-secrets`) securely alongside PostgreSQL; losing it requires reconnecting. Refresh is serialized across web and worker processes, and rotated refresh tokens are saved atomically. Legacy app access-token/token-file settings are no longer used.
 
 See [live HTTPS setup](docs/live-connection.md). The retained [diagnostic CLI](docs/poc.md) is independent and is not required for the application flow. Its plaintext diagnostic token files are not imported by the app.
 
@@ -277,11 +261,11 @@ PostgreSQL stores parsed invoice details and the original ZIP and generated PDF 
 
 Administrator sessions are stored in PostgreSQL as token hashes with server-side expiry, behind a replaceable session-store contract. The current worker processes one job at a time per queue; jobs have a five-minute execution timeout. The ZIP is stored before committing its invoice/outbox record; a crash can leave an orphan document row, which a subsequent sync reuses. Full archival completeness, long-running job heartbeats and packaged backup/upgrade tooling are future work.
 
-To diagnose failures, run `docker compose --env-file .env -f compose.yaml -f compose.https.yaml logs --tail 200 web worker`. Structured JSON log entries show the module, failing stage, a stable opaque entity reference, and allowlisted HTTP, database or network codes. The selected entity’s reference appears in Settings. Logs omit raw ANAF responses, OAuth values, invoice contents, fiscal identifiers and SMTP error text. Successful syncs log their imported invoice count and duration.
+To diagnose failures, run `docker compose --env-file .env -f compose.yaml logs --tail 200 web worker`. Structured JSON log entries show the module, failing stage, a stable opaque entity reference, and allowlisted HTTP, database or network codes. The selected entity’s reference appears in Settings. Logs omit raw ANAF responses, OAuth values, invoice contents, fiscal identifiers and SMTP error text. Successful syncs log their imported invoice count and duration.
 
 For cloud hosting later, substitute managed storage/queue adapters and add deployment-specific HTTPS, secret management and monitoring. Windows/Linux Docker compatibility follows the Linux-container packaging, but those host systems have not yet been separately exercised.
 
-Invoice amounts in the inbox, details and notifications use the XML total including VAT (`TaxInclusiveAmount`), rather than the remaining balance (`PayableAmount`). Existing stored amounts are corrected from the XML inside their original ZIP once at startup, transactionally per company. This does not modify source documents or resend notifications. Missing or invalid source XML prevents the correction from committing. After `npm run build`, run `node scripts/invoice-totals-integration.mjs` with the local development database to verify migration rollback, concurrency and idempotency using isolated synthetic records. Run `npm run test:files` to verify database document storage and interrupted-migration recovery.
+Invoice amounts in the inbox, details and notifications use the XML total including VAT (`TaxInclusiveAmount`), rather than the remaining balance (`PayableAmount`). Existing stored amounts are corrected from the XML inside their original ZIP once at startup, transactionally per company. This does not modify source documents or resend notifications. Missing or invalid source XML prevents the correction from committing. After `npm run build`, run `node --env-file=.env scripts/invoice-totals-integration.mjs` with the local development database to verify migration rollback, concurrency and idempotency using isolated synthetic records. Run `npm run test:files` to verify database document storage and interrupted-migration recovery.
 
 ## Contributing, security and license
 

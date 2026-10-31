@@ -1,6 +1,6 @@
 export type InvoiceData = {
     number: string; issueDate: string; dueDate: string; supplier: string;
-    supplierCIF: string; currency: string; net: string; tax: string; total: string;
+    supplierCif: string; currency: string; net: string; tax: string; total: string;
     // Version marker for stored projections; total is the full invoice value, including VAT.
     totalBasis?: 'tax-inclusive';
     lines: { description: string; quantity: string; amount: string }[];
@@ -12,9 +12,9 @@ export type InvoiceSort = 'issue' | 'added';
 export type SortDirection = 'asc' | 'desc';
 export type InvoicePage = { items: Invoice[]; total: number; allTotal: number; page: number; pageSize: number };
 export type Company = {
-    id: string; workspaceId: string; CIF: string; name: string; kind: 'company' | 'individual';
+    id: string; workspaceId: string; cif: string; name: string; kind: 'company' | 'individual';
     connectionId: string;
-    emailTo: string; emailEnabled: boolean;
+    emailTo: string; emailEnabled: boolean; mode: 'live'; environment: 'prod';
     pollSeconds: number; lastSync: string | null; nextSync: string;
     syncError: string | null; initialized: boolean;
 };
@@ -79,6 +79,6 @@ export type ConnectionStatus = {
     connectedAt: string | null;
 };
 export type ManagedConnection = {
-    id: string; name: string; verificationCIF: string | null; entityIds: string[];
+    id: string; name: string; verificationCif: string | null; entityIds: string[];
     status: ConnectionStatus;
 };

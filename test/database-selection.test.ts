@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { config } from '../app/config.js';
+import { config } from './helpers/config.js';
 
 test('named database selection changes only the database, preserving connection credentials and live OAuth settings', () => {
     const base = 'postgres://efactura:private-password@127.0.0.1:55432/efactura?sslmode=disable';
