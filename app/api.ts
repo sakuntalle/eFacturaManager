@@ -143,9 +143,8 @@ class ApiController {
         }
     }
     @Post('anaf/disconnect') async disconnect() {
-        if (!app.connection) throw new NotFoundException('ANAF connection not found.');
-        await app.connection.disconnect();
-        return { ok: true };
+        if (!await app.repo.managedConnection(DEFAULT_CONNECTION_ID)) throw new NotFoundException('ANAF connection not found.');
+        return this.disconnectManaged(DEFAULT_CONNECTION_ID);
     }
     @Post('anaf/connections/:id/disconnect') async disconnectManaged(@Param('id') id: string) {
         await (await app.connectionFor(uuid(id))).disconnect();

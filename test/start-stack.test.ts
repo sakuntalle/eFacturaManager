@@ -58,3 +58,16 @@ test('explicit no-build disables even automatic builds and a startup failure is 
         assert.equal(result.calls.some(args => args.includes('exec')), false);
         assert.doesNotMatch(result.stdout, /Website ready/);
     });
+
+test('unhealthy startup explains image rebuilding while preserving the Docker failure code',
+    { skip: process.platform === 'win32' }, async () => {
+        for (const args of [[], ['--build']]) {
+            const result = await runHelper(args, '7');
+            assert.equal(result.status, 7);
+            assert.match(result.stderr, /stack did not become healthy/);
+            assert.equal(result.stderr.includes('rerun this helper with --build'), args.length === 0);
+            assert.equal(result.calls.some(call => call.includes('exec')), false);
+            assert.doesNotMatch(result.stdout, /Website ready/);
+            assert.equal(`${result.stdout}${result.stderr}`.includes('synthetic-private-configuration'), false);
+        }
+    });

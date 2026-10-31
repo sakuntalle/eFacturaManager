@@ -43,8 +43,7 @@ try {
         VALUES ($1,$2,$3,$4,$5,$6)`, [DEFAULT_CONNECTION_ID, WORKSPACE_ID, 'live', 'prod',
         'Primary ANAF connection', { state: 'disconnected', encrypted: null, fingerprint: '', connectedAt: null }]);
 } finally { await setup.end(); }
-const firstCompany = await repo.createCompany({ name: 'Test company', kind: 'company', cif: env.ANAF_CIF,
-    emailTo: 'test@example.org', emailEnabled: false, pollSeconds: 60 }, DEFAULT_CONNECTION_ID);
+let firstCompany;
 const initialPassword = 'integration-initial-password';
 const changedPassword = 'integration-changed-password';
 const child = spawn(process.execPath, ['--import', './test/helpers/oauth-fetch.mjs', 'dist/server/app/api.js'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -83,7 +82,7 @@ try {
         if (child.exitCode !== null) break;
         await new Promise(resolve => setTimeout(resolve, 100));
     }
-    assert.ok(ready, 'Test app must start');
+    assert.ok(ready, 'Test app must become healthy with an unlinked primary ANAF connection');
     execFileSync(process.execPath, ['--input-type=module', '-e', `
         import { integrationOrigin } from './scripts/integration-target.mjs';
         const response = await fetch(new URL('/api/health', integrationOrigin()));
@@ -137,6 +136,19 @@ try {
         await page.getByLabel('Confirm new password').fill(changedPassword);
         await page.getByRole('button', { name: 'Change password' }).click();
         await page.getByRole('heading', { name: 'Manage ANAF connections' }).waitFor();
+        await page.getByText('Add an entity first', { exact: true }).waitFor();
+        await page.getByRole('button', { name: 'Add entity', exact: true }).click();
+        await page.getByLabel('Company name').fill('Test company');
+        await page.getByLabel('CIF / CUI').fill(env.ANAF_CIF);
+        await page.getByLabel('Notification email').fill('test@example.org');
+        await page.getByLabel('Send invoice emails').uncheck();
+        const companyCreated = page.waitForResponse(response => new URL(response.url()).pathname === '/api/companies'
+            && response.request().method() === 'POST');
+        await page.getByRole('button', { name: 'Add entity', exact: true }).click();
+        const creation = await companyCreated;
+        assert.equal(creation.status(), 201);
+        firstCompany = await creation.json();
+        assert.equal(firstCompany.connectionId, DEFAULT_CONNECTION_ID);
         await page.getByRole('button', { name: 'Email settings', exact: true }).click();
         await page.getByLabel('SMTP host', { exact: true }).fill('smtp.example.test');
         await page.getByLabel('Sender email').fill('sender@example.test');

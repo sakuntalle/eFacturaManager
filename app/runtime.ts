@@ -27,8 +27,8 @@ export async function runtime() {
         if (!managed?.verificationCif) throw new Error('Link an entity to this ANAF connection first.');
         return new AnafConnection({ ...cfg, cif: managed.verificationCif }, repo.forConnection(id));
     };
-    const connection = await repo.managedConnection(DEFAULT_CONNECTION_ID)
-        ? await connectionFor(DEFAULT_CONNECTION_ID) : null;
+    const primary = await repo.managedConnection(DEFAULT_CONNECTION_ID);
+    const connection = primary?.verificationCif ? await connectionFor(DEFAULT_CONNECTION_ID) : null;
     const scope = async (id?: string) => {
         const company = id ? await repo.findCompany(id) : await repo.company();
         if (!company || company.mode !== cfg.mode || company.environment !== cfg.environment) throw new Error('Company not found.');

@@ -60,7 +60,15 @@ elif [[ "$build" == false ]]; then
     start_args+=(--no-build)
 fi
 start_args+=(--wait --wait-timeout 60)
-"${compose[@]}" "${start_args[@]}"
+startup_status=0
+"${compose[@]}" "${start_args[@]}" || startup_status=$?
+if [[ "$startup_status" -ne 0 ]]; then
+    printf '%s\n' 'The stack did not become healthy. Check the service startup diagnostics.' >&2
+    if [[ "$build" != true ]]; then
+        printf '%s\n' 'After updating the source, rerun this helper with --build to replace an older application image.' >&2
+    fi
+    exit "$startup_status"
+fi
 
 # Use the app's own configuration inside Docker; no host Node.js installation is needed.
 if stack_url="$("${compose[@]}" exec -T web node --input-type=module -e \

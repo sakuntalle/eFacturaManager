@@ -106,6 +106,8 @@ For normal starts, no build flag is needed. After changing application source, a
 
 Use `--help` to display options. You can invoke either helper by its absolute path from any working directory; environment-file paths are relative to the project root.
 
+After pulling source updates, use `--build` for the first start. A normal start reuses the existing application image, so it cannot apply a startup fix from newer source. A connection without a linked entity is valid during onboarding and must not prevent the web app or worker from starting.
+
 To exercise the image built from the current checkout:
 
 ```sh
