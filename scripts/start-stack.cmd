@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-set "stack_build_arg=--build"
+set "stack_build_arg="
 set "stack_env_file="
 set "stack_pause=1"
 set "stack_exit_code=0"
@@ -15,8 +15,13 @@ if errorlevel 1 (
 if "%~1"=="" goto prerequisites
 if /i "%~1"=="--help" goto help
 if /i "%~1"=="-h" goto help
+if /i "%~1"=="--build" (
+    set "stack_build_arg=--build"
+    shift
+    goto parse
+)
 if /i "%~1"=="--no-build" (
-    set "stack_build_arg="
+    set "stack_build_arg=--no-build"
     shift
     goto parse
 )
@@ -76,8 +81,9 @@ echo Create readable .local\tls\localhost.pem and localhost-key.pem first. See d
 goto failed
 
 :help
-echo Usage: scripts\start-stack.cmd [--no-build] [--env-file file] [--no-pause]
+echo Usage: scripts\start-stack.cmd [--build ^| --no-build] [--env-file file] [--no-pause]
 echo Starts the HTTPS Docker stack and waits for service health. Existing volumes are preserved.
+echo By default, reuse existing images and containers; Compose builds missing images. Use --build after source changes.
 echo By default, errors pause so they remain visible when double-clicking. Use --no-pause for automation.
 goto finish
 

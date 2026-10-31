@@ -72,7 +72,7 @@ The browser suite uses controlled API responses and does not need the real admin
 
 Before the first Docker launch, create and trust `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem` using the [local HTTPS setup](local-https.md). If your `.env` previously used HTTP, update `APP_PUBLIC_URL` and `APP_TLS_PORT` using that guide's migration instructions.
 
-Start Docker Desktop or the Docker daemon, then run the command for your platform from the project folder. Both helpers use your `.env`, build images, start the services, wait for health, and print the website address. They preserve existing volumes and require neither Node.js nor npm on the host. They start the stack; create the administrator separately on first installation as described below.
+Start Docker Desktop or the Docker daemon, then run the command for your platform from the project folder. Both helpers use your `.env`, reuse existing images, start the services, wait for health, and print the website address. On a fresh setup, Compose builds missing application images and pulls missing dependency images. Unchanged running containers are kept; stopped containers are started. Compose may recreate a container if its configuration or image has changed. Existing volumes are preserved. The helpers require neither Node.js nor npm on the host. They start the stack; create the administrator separately on first installation as described below.
 
 On macOS or Linux:
 
@@ -94,14 +94,14 @@ scripts\start-stack.cmd
 
 Windows users can also double-click `scripts\start-stack.cmd` in File Explorer. If startup fails, the window waits for a keypress so the error remains visible. Add `--no-pause` when using the Windows helper in automation; failure still returns a nonzero exit code. The Windows helper does not require Bash, WSL, or a PowerShell execution-policy change.
 
-Both helpers accept `--no-build` to reuse built images and `--env-file .env.example` to select the example configuration:
+For normal starts, no build flag is needed. After changing application source, add `--build` to rebuild and deploy it. Both helpers accept `--no-build` to prohibit building even when an image is missing, and `--env-file .env.example` to select the example configuration:
 
 ```sh
-./scripts/start-stack.sh --no-build --env-file .env.example
+./scripts/start-stack.sh --build --env-file .env.example
 ```
 
 ```powershell
-.\scripts\start-stack.cmd --no-build --env-file .env.example
+.\scripts\start-stack.cmd --build --env-file .env.example
 ```
 
 Use `--help` to display options. You can invoke either helper by its absolute path from any working directory; environment-file paths are relative to the project root.

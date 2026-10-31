@@ -72,7 +72,7 @@ For an already configured checkout, use the startup helper for your platform:
 | Windows PowerShell | `.\scripts\start-stack.cmd` |
 | Windows Command Prompt | `scripts\start-stack.cmd` |
 
-Both helpers build and launch the HTTPS stack, wait for health checks, preserve existing volumes, and print the website address. Docker must be running; neither helper requires Node.js or npm on the host. Windows requires Docker Desktop running Linux containers, with no Bash or WSL requirement. Add `--no-build` to reuse existing images. See the [platform startup instructions](docs/development.md#docker-development-build) for options and first-install prerequisites.
+Both helpers launch the HTTPS stack, reuse existing images and containers, wait for health checks, preserve existing volumes, and print the website address. On a fresh setup, Compose builds missing application images and pulls missing dependency images. Add `--build` after source changes to rebuild the application; `--no-build` explicitly prohibits building missing images. Docker must be running; neither helper requires Node.js or npm on the host. Windows requires Docker Desktop running Linux containers, with no Bash or WSL requirement. See the [platform startup instructions](docs/development.md#docker-development-build) for options and first-install prerequisites.
 
 Before the first launch, follow the [local HTTPS setup](docs/local-https.md) to create and trust `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem`. Existing HTTP installations must also update `APP_PUBLIC_URL` and `APP_TLS_PORT` as described there.
 
