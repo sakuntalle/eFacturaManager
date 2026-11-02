@@ -37,7 +37,7 @@
         "first-login:stop": "node --env-file=.env scripts/first-login-demo.mjs stop"
     },
     "dependencies": {
-        "@nestjs/common": "12.1.0",
+        "@nestjs/common": "12.3.2",
         "@nestjs/core": "12.1.2",
         "@nestjs/platform-express": "12.3.2",
         "@nestjs/serve-static": "12.0.0",
