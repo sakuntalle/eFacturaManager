@@ -88,7 +88,7 @@ test('fresh admin setup guides connection creation, entity linking and authoriza
     await expect(page.getByLabel('ANAF connection')).toHaveValue(connectionId);
     await page.getByLabel('Company name').fill(company.name);
     await page.getByLabel('CIF / CUI').fill(company.cif);
-    await page.getByLabel('Notification email').fill(company.emailTo);
+    await page.getByLabel('Notification email', { exact: true }).fill(company.emailTo);
     await page.getByRole('button', { name: 'Add entity', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Manage ANAF connections' })).toBeVisible();
     await expect(row).toContainText(company.name);

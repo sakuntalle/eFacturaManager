@@ -3,6 +3,7 @@ export type SmtpSettings = {
     user: string; password: string; from: string; to: string; configured: boolean;
 };
 export type SmtpInput = Omit<SmtpSettings, 'password' | 'configured' | 'to'> & { password?: string };
+export const SMTP_REQUIRED_FOR_NOTIFICATIONS = 'Configure SMTP in Email settings before enabling E-invoice notification emails.';
 
 export function defaultSmtpSettings(): SmtpSettings {
     return { host: '', port: 587, secure: false, requireTLS: true, user: '', password: '',
@@ -34,6 +35,25 @@ export function smtpInput(value: Record<string, unknown>): SmtpInput {
         || /[\u0000\r\n]/u.test(value.password))) throw new Error('Enter a valid SMTP password.');
     return { host, port: Number(value.port), secure: value.secure, requireTLS: value.requireTLS,
         user, from, ...(value.password ? { password: value.password as string } : {}) };
+}
+
+// Older installations stored the sender in .env. Import only an explicitly
+// configured, complete sender; fresh installs keep the empty in-app defaults.
+export function legacySmtpInput(env: NodeJS.ProcessEnv): SmtpInput | null {
+    if (!env.SMTP_HOST?.trim() || !env.EMAIL_FROM?.trim()) return null;
+    try {
+        const boolean = (name: string) => {
+            const value = env[name] || 'false';
+            if (value !== 'true' && value !== 'false') throw new Error('Invalid legacy SMTP setting.');
+            return value === 'true';
+        };
+        const input = smtpInput({ host: env.SMTP_HOST, port: Number(env.SMTP_PORT || 1025),
+            secure: boolean('SMTP_SECURE'), requireTLS: boolean('SMTP_REQUIRE_TLS'),
+            user: env.SMTP_USER ?? '', password: env.SMTP_PASSWORD, from: env.EMAIL_FROM });
+        return input.user && !input.password ? null : input;
+    } catch {
+        return null;
+    }
 }
 
 export function publicSmtp(settings: SmtpSettings) {

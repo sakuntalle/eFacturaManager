@@ -25,6 +25,8 @@ export function isolatedEnvironment(source, databaseName, mode, baseEnv = proces
         APP_TLS_KEY_FILE: '.local/tls/localhost-key.pem',
         APP_TLS_PORT: String(FIRST_LOGIN_HTTPS_PORT),
         EMAIL_ENABLED: 'false',
+        SMTP_HOST: '',
+        EMAIL_FROM: '',
         DATA_DIR: '.local/first-login-demo/data',
         APP_SECRETS_DIR: '.local/first-login-demo/secrets',
         ANAF_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),

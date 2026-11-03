@@ -139,57 +139,19 @@ The administrator can also delete the selected company or individual in **Settin
 
 ## Configure your own SMTP provider
 
-Edit `.env` locally. Email transport is independent of `ANAF_MODE`, so keep your current ANAF connection and change only the mail settings:
+Open **Email settings** in the sidebar to configure the SMTP server shared by all entities. Enter the provider's hostname, port, TLS settings, username, password and permitted sender address, then choose **Save email settings**. The sender and encrypted SMTP credentials are persisted in PostgreSQL and shared by the web and worker services. Changes take effect without restarting them. After the first save, leaving the password blank retains the saved password for the same username.
 
-```dotenv
-EMAIL_ENABLED=true
-SMTP_HOST=smtp.your-provider.example
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_REQUIRE_TLS=true
-SMTP_USER=your-smtp-username
-SMTP_PASSWORD="your-smtp-password"
-EMAIL_FROM="Your Company <invoices@your-domain.example>"
-EMAIL_TO=your-initial-recipient@your-domain.example
-```
+In each entity's **Settings**, choose its **Notification email** and whether to **Send E-invoice notification emails**. The notification checkbox can only be enabled after an SMTP sender has been configured. The **Email transport** card shows the shared server, sender and encryption settings and links to **Email settings**. The dashboard distinguishes an entity's disabled notification switch from a missing SMTP configuration.
 
-Use the port, authentication and sender permitted by your provider. For implicit TLS on port 465 set `SMTP_SECURE=true`. TLS certificate verification remains enabled. `EMAIL_TO` seeds the original entity during migration or first startup; subsequent recipient changes belong in each entity’s Settings page. SMTP credentials remain deployment-wide in `.env`.
-
-For a personal Gmail sending account, turn on 2-Step Verification and create a Google app password. Keep both the mailbox address and app password only in your local `.env`, with these values:
-
-```dotenv
-EMAIL_ENABLED=true
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=465
-SMTP_SECURE=true
-SMTP_REQUIRE_TLS=false
-SMTP_USER=your-sending-address@gmail.com
-SMTP_PASSWORD="your-16-character-app-password"
-EMAIL_FROM="eFactura Manager <your-sending-address@gmail.com>"
-EMAIL_TO=your-destination-address@example.com
-```
-
-Use the Gmail account as both `SMTP_USER` and the address in `EMAIL_FROM`; `EMAIL_TO` can be a different mailbox. The app password is separate from your Google account password. If Google does not offer app passwords for this account, use another SMTP provider rather than putting your normal password in `.env`.
+On upgrade, complete SMTP settings from an older `.env` file are automatically imported into encrypted storage if no sender has been saved in the app. The import reads `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_REQUIRE_TLS`, `SMTP_USER`, `SMTP_PASSWORD` and `EMAIL_FROM`. It preserves each entity's recipient and notification switch. Existing in-app SMTP settings always take precedence over legacy values; fresh installations have no implicit local mail server.
 
 ### Recover the administrator password
 
-Use **Forgot password?** on the sign-in page and enter an email address saved as the notification recipient for any managed company or individual. The application gives the same response for matching and non-matching addresses. It sends a reset link only to the matching address stored in PostgreSQL, using the deployment SMTP settings. `EMAIL_TO` in `.env` alone does not qualify until it is saved on a managed entity. The link expires after 30 minutes and works once; changing the password revokes all existing sessions and pending reset links. The reset email is independent of the entity's **Send invoice emails** setting.
+Use **Forgot password?** on the sign-in page and enter an email address saved as the notification recipient for any managed company or individual. The application gives the same response for matching and non-matching addresses. It sends a reset link only to the matching address stored in PostgreSQL, using the saved SMTP settings. `EMAIL_TO` in `.env` alone does not qualify until it is saved on a managed entity. The link expires after 30 minutes and works once; changing the password revokes all existing sessions and pending reset links. The reset email is independent of the entity's **Send E-invoice notification emails** setting.
 
 Anyone who controls any managed entity's notification mailbox can reset the single global administrator account and access every entity. Configure those recipient addresses accordingly. The link uses `APP_PUBLIC_URL`, so a localhost URL only opens from the host machine. If the database has no managed entities yet, use the initial administrator password in that database's local README.
 
-After saving `.env`, run `npm run email:test` from the project directory. It sends one clearly labeled test message to `EMAIL_TO` using the same SMTP settings as invoice notifications. It prints only a generic success or failure and never prints the mailbox addresses or password. Then restart both the web and worker services as shown below so automatic notifications use the new settings.
-
-Apply the configuration to the running HTTPS deployment (the worker sends the emails):
-
-```sh
-docker compose --env-file .env -f compose.yaml up -d --no-deps web worker
-```
-
-Mailpit is optional when `SMTP_HOST` points to an external provider. Once real delivery works, stop its local container with `docker compose --env-file .env -f compose.yaml stop mailpit`.
-
-Then create a new simulated invoice in the Mocked ANAF tab. Emails are labeled **[SIMULATED ANAF]** and link back to the app. Set `APP_PUBLIC_URL` to the address the recipient can actually reach. A localhost link is usable only on the machine hosting the app.
-
-`EMAIL_ENABLED=false` marks notification events as skipped; they can be replayed through Activity after enabling email. A failure to send email does not undo invoice collection or block its PDF. SMTP errors retry up to five attempts with exponential backoff, then become visible as failed work. Fix the settings and use Retry. SMTP acceptance is not proof of final inbox delivery.
+If delivery fails, invoice collection and PDF storage continue. SMTP errors retry up to five attempts with exponential backoff, then appear as failed work in **Activity**. After correcting the sender or recipient, use **Retry** on the affected task. Notifications skipped while an entity's email switch was disabled can also be retried there. SMTP acceptance does not guarantee final inbox delivery.
 
 ## Run during development
 

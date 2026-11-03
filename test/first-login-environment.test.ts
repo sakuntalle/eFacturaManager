@@ -10,7 +10,7 @@ test('fresh-login live instance uses a separate database and its own HTTPS ANAF 
     const source = new URL('postgres://tester:private@127.0.0.1:55432/live_db');
     const base = { ANAF_MODE: 'live', ANAF_CIF: '12345678', ANAF_CLIENT_ID: 'private-id',
         ANAF_CLIENT_SECRET: 'private-secret', ANAF_TOKEN_ENCRYPTION_KEY: 'private-key',
-        ANAF_REDIRECT_URI: 'https://localhost:8765/callback' };
+        ANAF_REDIRECT_URI: 'https://localhost:8765/callback', SMTP_HOST: 'private.example.test', EMAIL_FROM: 'sender@example.test' };
     const live = isolatedEnvironment(source, 'efactura_first_login_123456789abc', 'live', base);
     assert.equal(new URL(live.DATABASE_URL).pathname, '/efactura_first_login_123456789abc');
     assert.equal(live.APP_DATABASE_NAME, 'efactura_first_login_123456789abc');
@@ -20,6 +20,9 @@ test('fresh-login live instance uses a separate database and its own HTTPS ANAF 
     assert.equal(live.APP_TLS_PORT, new URL(FIRST_LOGIN_LIVE_ORIGIN).port);
     assert.ok(live.APP_TLS_CERT_FILE && live.APP_TLS_KEY_FILE);
     assert.equal(live.EMAIL_ENABLED, 'false');
+    assert.equal(live.SMTP_HOST, '');
+    assert.equal(live.EMAIL_FROM, '');
+    assert.equal(config(live).legacySmtp, null, 'An isolated test instance cannot import the real sender');
     assert.equal(base.ANAF_REDIRECT_URI, 'https://localhost:8765/callback',
         'The live installation callback must remain unchanged');
     assert.throws(() => isolatedEnvironment(source, 'efactura_first_login_123456789abc', 'mock', base), /must be live/);

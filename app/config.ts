@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { selectedDatabaseUrl } from './database-selection.js';
 import { loadAppSecrets, type AppSecrets } from './secrets.js';
-import { defaultSmtpSettings } from './smtp-settings.js';
+import { defaultSmtpSettings, legacySmtpInput } from './smtp-settings.js';
 
 const MIN_SESSION_SECRET_LENGTH = 32;
 
@@ -83,6 +83,7 @@ export function config(env: NodeJS.ProcessEnv = process.env) {
         tls: { certFile: env.APP_TLS_CERT_FILE, keyFile: env.APP_TLS_KEY_FILE, port: tlsPort },
         emailEnabled: false,
         smtp: defaultSmtpSettings(),
+        legacySmtp: legacySmtpInput(env),
     };
 }
 export type Config = ReturnType<typeof config>;
