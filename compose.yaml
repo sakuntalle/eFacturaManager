@@ -14,6 +14,14 @@ x-app-environment: &app-environment
     # One-time migration inputs for installations created before app-secrets.
     APP_SESSION_SECRET: ${APP_SESSION_SECRET:-}
     ANAF_TOKEN_ENCRYPTION_KEY: ${ANAF_TOKEN_ENCRYPTION_KEY:-}
+    # One-time import for SMTP configured in older .env files. Saved app settings win.
+    SMTP_HOST: ${SMTP_HOST:-}
+    SMTP_PORT: ${SMTP_PORT:-}
+    SMTP_SECURE: ${SMTP_SECURE:-}
+    SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-}
+    SMTP_USER: ${SMTP_USER:-}
+    SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    EMAIL_FROM: ${EMAIL_FROM:-}
 
 services:
     database:

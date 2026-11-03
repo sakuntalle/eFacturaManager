@@ -153,6 +153,7 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
             await client.query('INSERT INTO app_migrations(version) VALUES (7) ON CONFLICT DO NOTHING');
             await client.query('INSERT INTO app_migrations(version) VALUES (8) ON CONFLICT DO NOTHING');
             await client.query('INSERT INTO app_migrations(version) VALUES (9) ON CONFLICT DO NOTHING');
+            await this.migrateLegacySmtp(client);
             await client.query('COMMIT');
         } catch (error) { await client.query('ROLLBACK'); throw error; }
         finally { client.release(); }
@@ -498,6 +499,22 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
         const { rows: [row] } = await this.pool.query('SELECT encrypted FROM workspace_smtp WHERE workspace_id=$1', [WORKSPACE]);
         return this.readSmtp(row?.encrypted);
     }
+    private encryptedSmtp(input: SmtpInput, password: string): string {
+        const iv = randomBytes(12);
+        const cipher = createCipheriv('aes-256-gcm', this.smtpKey(), iv);
+        cipher.setAAD(Buffer.from(`smtp:${WORKSPACE}`));
+        const bytes = Buffer.concat([cipher.update(JSON.stringify({ ...input, password }), 'utf8'), cipher.final()]);
+        return [iv, cipher.getAuthTag(), bytes].map(value => value.toString('base64')).join('.');
+    }
+    private async migrateLegacySmtp(client: pg.PoolClient) {
+        const input = this.cfg.legacySmtp;
+        if (!input) return;
+        await client.query('SELECT pg_advisory_xact_lock(81392004)');
+        const { rows: [row] } = await client.query('SELECT encrypted FROM workspace_smtp WHERE workspace_id=$1', [WORKSPACE]);
+        if (row) return;
+        await client.query('INSERT INTO workspace_smtp(workspace_id,encrypted) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+            [WORKSPACE, this.encryptedSmtp(input, input.password ?? '')]);
+    }
     async saveSmtpSettings(input: SmtpInput) {
         const client = await this.pool.connect();
         try {
@@ -507,11 +524,7 @@ export class PostgresRepository implements Repository, SessionStore, ConnectionS
             const current = this.readSmtp(row?.encrypted);
             const password = input.password ?? (input.user === current.user ? current.password : '');
             if (input.user && !password) throw new Error('Enter the SMTP password for this username.');
-            const iv = randomBytes(12);
-            const cipher = createCipheriv('aes-256-gcm', this.smtpKey(), iv);
-            cipher.setAAD(Buffer.from(`smtp:${WORKSPACE}`));
-            const bytes = Buffer.concat([cipher.update(JSON.stringify({ ...input, password }), 'utf8'), cipher.final()]);
-            const encrypted = [iv, cipher.getAuthTag(), bytes].map(value => value.toString('base64')).join('.');
+            const encrypted = this.encryptedSmtp(input, password);
             await client.query(`INSERT INTO workspace_smtp(workspace_id,encrypted) VALUES ($1,$2)
                 ON CONFLICT(workspace_id) DO UPDATE SET encrypted=EXCLUDED.encrypted`, [WORKSPACE, encrypted]);
             await client.query('COMMIT');

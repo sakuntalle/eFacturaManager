@@ -17,7 +17,10 @@ const directory = await mkdtemp(join(tmpdir(), 'efactura-smtp-'));
 const admin = new pg.Client({ connectionString: source.toString() });
 let repo;
 let worker;
+let migrationWeb;
+let migrationWorker;
 let created = false;
+let stage = 'setup';
 try {
     await admin.connect();
     await admin.query(`CREATE DATABASE ${name}`);
@@ -29,27 +32,50 @@ try {
     assert.equal((await repo.smtpSettings()).configured, false);
     const fixture = { host: 'smtp.example.test', port: 587, secure: false, requireTLS: true,
         user: 'synthetic-user', password: 'synthetic-password', from: 'sender@example.test' };
-    await repo.saveSmtpSettings(smtpInput(fixture));
+    const connection = await repo.createManagedConnection('Migration test connection');
+    const company = (name, cif, emailTo, emailEnabled) => ({ name, cif, kind: 'company', emailTo, emailEnabled, pollSeconds: 60 });
+    const entities = await Promise.all([
+        repo.createCompany(company('First company', '12345678', 'first@example.test', true), connection.id),
+        repo.createCompany(company('Second company', '87654321', 'second@example.test', false), connection.id),
+    ]);
+    const legacyEnv = { ...env, SMTP_HOST: fixture.host, SMTP_PORT: String(fixture.port), SMTP_SECURE: 'false',
+        SMTP_REQUIRE_TLS: 'true', SMTP_USER: fixture.user, SMTP_PASSWORD: fixture.password, EMAIL_FROM: fixture.from };
+    migrationWeb = new PostgresRepository(await initializedConfig(legacyEnv));
+    migrationWorker = new PostgresRepository(await initializedConfig(legacyEnv));
+    stage = 'legacy_migration';
+    await Promise.all([migrationWeb.initialize(), migrationWorker.initialize()]);
+    assert.equal((await repo.smtpSettings()).configured, true, 'A legacy sender is restored for every entity');
+    assert.equal((await repo.smtpSettings()).password === fixture.password, true);
+    for (const entity of entities) assert.deepEqual(await repo.findCompany(entity.id), entity,
+        'Migration preserves entity notification recipients and switches');
     const query = new pg.Client({ connectionString: target.toString() });
     await query.connect();
     try {
         const { rows: [row] } = await query.query('SELECT encrypted FROM workspace_smtp');
         assert.equal(row.encrypted.includes(fixture.password), false);
         assert.equal(row.encrypted.includes(fixture.user), false);
+        assert.equal((await query.query('SELECT count(*)::integer AS total FROM workspace_smtp')).rows[0].total, 1);
     } finally { await query.end(); }
     worker = new PostgresRepository(await initializedConfig(env));
+    stage = 'password_retention';
     assert.equal((await worker.smtpSettings()).password === fixture.password, true);
     await worker.saveSmtpSettings(smtpInput({ ...fixture, port: 465, secure: true, password: '' }));
     const saved = await repo.smtpSettings();
     assert.equal(saved.port, 465);
     assert.equal(saved.password === fixture.password, true);
     assert.equal('password' in publicSmtp(saved), false);
-    await repo.initialize();
+    await migrationWeb.initialize();
+    assert.equal((await repo.smtpSettings()).port, 465, 'An older .env sender cannot overwrite in-app changes');
     assert.equal((await repo.smtpSettings()).password === fixture.password, true);
-    console.log('PASS: encrypted SMTP persistence, shared web/worker secrets, restart and password retention.');
+    console.log('PASS: legacy SMTP migration, encrypted persistence, concurrent startup, entity isolation and password retention.');
+} catch (error) {
+    const code = typeof error?.code === 'string' && /^(?:[0-9A-Z]{5}|ERR_ASSERTION)$/.test(error.code) ? error.code : 'unexpected';
+    const kind = ['AssertionError', 'TypeError', 'Error'].includes(error?.name) ? error.name : 'unexpected';
+    console.error(JSON.stringify({ category: 'smtp_migration_test_failure', stage, kind, code }));
+    process.exitCode = 1;
 } finally {
-    await Promise.all([repo?.close(), worker?.close()]);
-    if (created) await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    await Promise.all([repo?.close(), worker?.close(), migrationWeb?.close(), migrationWorker?.close()]);
+    if (created) await admin.query(`DROP DATABASE IF EXISTS ${name}`);
     await admin.end();
     await rm(directory, { recursive: true, force: true });
 }

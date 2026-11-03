@@ -17,7 +17,7 @@ import { diagnosticReference, logFailure, logInfo } from './diagnostics.js';
 import { PasswordResets } from './password-reset.js';
 import { SmtpNotificationChannel } from './adapters/email.js';
 import { bulkInvoiceIds, createInvoiceBundle } from './invoice-bundle.js';
-import { publicSmtp, smtpInput } from './smtp-settings.js';
+import { publicSmtp, smtpInput, SMTP_REQUIRED_FOR_NOTIFICATIONS } from './smtp-settings.js';
 
 const app = await runtime().catch(error => { logFailure('web', 'startup', error); process.exit(1); });
 const bindingCookie = 'efactura_oauth';
@@ -49,6 +49,9 @@ function operation(path: string): 'authentication' | 'connection' | 'companies' 
 }
 @Controller('api')
 class ApiController {
+    private async requireNotificationTransport(enabled: boolean) {
+        if (enabled && !(await app.repo.smtpSettings()).configured) throw new BadRequestException(SMTP_REQUIRED_FOR_NOTIFICATIONS);
+    }
     private async selected(id?: string) {
         if (id !== undefined) uuid(id);
         if (id && !await app.repo.findCompany(id)) throw new NotFoundException('Entity not found.');
@@ -178,6 +181,7 @@ class ApiController {
         let input;
         try { input = entityInput(body); }
         catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid entity settings.'); }
+        await this.requireNotificationTransport(input.emailEnabled);
         const connectionId = body.connectionId === undefined ? DEFAULT_CONNECTION_ID : uuid(String(body.connectionId));
         if (!await app.repo.managedConnection(connectionId)) throw new BadRequestException('Choose an ANAF connection.');
         try { return await app.repo.createCompany(input, connectionId); }
@@ -193,6 +197,7 @@ class ApiController {
         let input;
         try { input = entityInput(body); }
         catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Invalid entity settings.'); }
+        await this.requireNotificationTransport(input.emailEnabled);
         if (input.cif !== item.company.cif || input.kind !== item.company.kind) {
             throw new BadRequestException('Entity type and fiscal identifier cannot be changed after setup.');
         }

@@ -55,6 +55,8 @@ test('administrator can browse invoices, inspect details, change polling and use
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
+    await expect(page.getByRole('navigation', { name: 'Entity views' }).getByRole('button'))
+        .toHaveText([/^Invoices\s*1$/, 'Activity', 'Settings']);
     await expect(page.getByRole('heading', { name: 'Your invoice inbox' })).toBeVisible();
     await page.locator('.invoice-link').first().click();
     await expect(page.locator('.details')).toBeVisible();

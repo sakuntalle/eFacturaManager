@@ -12,6 +12,8 @@ const environment = {
     POSTGRES_PASSWORD: 'synthetic-compose-password',
     APP_TLS_PORT: '9876',
     EFACTURA_VERSION: '1.0.1',
+    SMTP_HOST: 'smtp.example.test', SMTP_PORT: '465', SMTP_SECURE: 'true', SMTP_REQUIRE_TLS: 'false',
+    SMTP_USER: 'synthetic-user', SMTP_PASSWORD: 'synthetic-smtp-password', EMAIL_FROM: 'sender@example.test',
 };
 const composeAvailable = spawnSync('docker', ['compose', 'version'], { env: environment }).status === 0;
 
@@ -44,6 +46,9 @@ test('source and release Compose retain HTTPS and shared secrets without release
                 for (const service of ['web', 'worker', 'admin-bootstrap']) {
                     const item = resolved.services[service];
                     assert.equal(item.environment.APP_SECRETS_DIR, '/app/secrets');
+                    for (const key of ['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_REQUIRE_TLS', 'SMTP_USER', 'SMTP_PASSWORD', 'EMAIL_FROM'] as const) {
+                        assert.equal(item.environment[key], environment[key], `${name} must forward legacy ${key} for migration`);
+                    }
                     assert.ok(item.volumes.some((volume: { source: string; target: string }) =>
                         volume.source === 'app-secrets' && volume.target === '/app/secrets'));
                     if (name === 'compose.release.yaml') {

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Company, Event, Invoice, InvoicePage, InvoiceSort, ManagedConnection, SortDirection } from '../../app/contracts.js';
-import { defaultSmtpSettings, publicSmtp, type SmtpInput } from '../../app/smtp-settings.js';
+import { defaultSmtpSettings, publicSmtp, SMTP_REQUIRED_FOR_NOTIFICATIONS, type SmtpInput } from '../../app/smtp-settings.js';
 import { ThemeProvider, ThemeSwitch } from './theme.js';
 import { InvoiceDetails } from './invoice-details.js';
 import { formatAddedDate, formatAppDateTime, formatInvoiceDate } from './invoice-date.js';
@@ -130,13 +130,14 @@ function ViewportHorizontalScrollbar({ targetRef }: { targetRef: React.RefObject
 }
 type EntityDraft = { name: string; kind: 'company' | 'individual'; cif: string; emailTo: string;
     emailEnabled: boolean; pollSeconds: number; connectionId: string };
-function EntityForm({ initial, connections, creating, busy, onSave }: { initial: EntityDraft; connections: ManagedConnection[];
-    creating: boolean; busy: boolean;
+function EntityForm({ initial, connections, creating, busy, smtpConfigured, onSave }: { initial: EntityDraft; connections: ManagedConnection[];
+    creating: boolean; busy: boolean; smtpConfigured: boolean;
     onSave: (value: EntityDraft) => Promise<void> }) {
     const [draft, setDraft] = useState(initial);
     useEffect(() => setDraft(initial), [initial.name, initial.kind, initial.cif, initial.emailTo,
         initial.emailEnabled, initial.pollSeconds, initial.connectionId]);
-    return <form onSubmit={event => { event.preventDefault(); void onSave(draft); }}>
+    const missingTransport = draft.emailEnabled && !smtpConfigured;
+    return <form onSubmit={event => { event.preventDefault(); if (!busy && !missingTransport) void onSave(draft); }}>
         <div className="entity-kind-field"><span>Type</span><div className="entity-kind-switch" role="group" aria-label="Entity type">
             {(['company', 'individual'] as const).map(kind => <button key={kind} type="button"
                 aria-pressed={draft.kind === kind} disabled={!creating || busy}
@@ -156,8 +157,10 @@ function EntityForm({ initial, connections, creating, busy, onSave }: { initial:
         <label>Notification email<input type="email" required maxLength={254} value={draft.emailTo}
             onChange={event => setDraft({ ...draft, emailTo: event.target.value })} disabled={busy} /></label>
         <label className="checkbox-label"><input type="checkbox" checked={draft.emailEnabled}
-            onChange={event => setDraft({ ...draft, emailEnabled: event.target.checked })} disabled={busy} />Send invoice emails</label>
-        <button className="primary" disabled={busy}>{creating ? 'Add entity' : 'Save entity settings'}</button>
+            onChange={event => setDraft({ ...draft, emailEnabled: event.target.checked })}
+            disabled={busy || (!smtpConfigured && !draft.emailEnabled)} />Send E-invoice notification emails</label>
+        {!smtpConfigured && <p className="muted" role={missingTransport ? 'alert' : undefined}>{SMTP_REQUIRED_FOR_NOTIFICATIONS}</p>}
+        <button className="primary" disabled={busy || missingTransport}>{creating ? 'Add entity' : 'Save entity settings'}</button>
     </form>;
 }
 function SmtpForm({ settings, busy, onSave }: { settings: ReturnType<typeof publicSmtp>; busy: boolean;
@@ -717,8 +720,10 @@ function App() {
                         <button className="secondary" onClick={() => navigate('connections')}>Manage ANAF connections</button>
                     </div> : <section className="card settings-card add-entity-card">
                         <EntityForm key={selectedNewEntityConnectionId} connections={connections}
+                            smtpConfigured={status.smtp?.configured ?? status.emailEnabled}
                             initial={{ name: '', kind: 'company', cif: '', emailTo: status.emailTo,
-                                emailEnabled: true, pollSeconds: 60, connectionId: selectedNewEntityConnectionId }} creating busy={busy} onSave={value => action(async () => {
+                                emailEnabled: status.smtp?.configured ?? status.emailEnabled, pollSeconds: 60,
+                                connectionId: selectedNewEntityConnectionId }} creating busy={busy} onSave={value => action(async () => {
                             const created = await api<Company>('companies', value);
                             if (previousView?.tab === 'connections') goBack();
                             else selectCompany(created.id, created);
@@ -751,7 +756,9 @@ function App() {
                 {!setup && <section className="stats">
                     <div><span>Invoices collected</span><strong>{invoiceTotal}</strong></div>
                     <div><span>Last successful sync</span><strong className="small-value">{date(currentCompany.lastSync)}</strong><small>Checks every {currentCompany.pollSeconds} seconds</small></div>
-                    <div><span>Email notifications</span><strong className="small-value">{status?.emailEnabled ? 'Enabled' : 'Disabled'}</strong><small>{failed ? `${failed} task(s) need attention` : ''}</small></div>
+                    <div><span>Email notifications</span><strong className="small-value">{!currentCompany.emailEnabled ? 'Disabled'
+                        : status.smtp?.configured === false ? 'SMTP not configured' : status.emailEnabled ? 'Enabled' : 'Disabled'}</strong>
+                        <small>{failed ? `${failed} task(s) need attention` : ''}</small></div>
                 </section>}
                 {tab === 'inbox' && !setup && <section className="card">
                     <div className="card-toolbar"><h2>All received invoices <span className="count">{matchingTotal}</span></h2>
@@ -822,11 +829,18 @@ function App() {
                             cif: currentCompany.cif, emailTo: currentCompany.emailTo, emailEnabled: currentCompany.emailEnabled,
                             pollSeconds: currentCompany.pollSeconds,
                             connectionId: currentCompany.connectionId }} connections={connections} busy={busy} creating={false}
+                            smtpConfigured={status.smtp?.configured ?? status.emailEnabled}
                             onSave={value => action(() => api(`companies/${currentCompany.id}`, value), 'Entity settings saved.')} />
                         <hr /><button className="danger" disabled={busy} onClick={() => setDeleteTarget(currentCompany)}>Delete this {currentCompany.kind}</button>
                     </section>
                     <section className="card settings-card"><h2>Email transport</h2>
                         <p>Configure the shared SMTP server in Email settings. Each entity has its own notification address above.</p>
+                        {status.smtp?.configured ? <dl className="smtp-summary">
+                            <dt>SMTP server</dt><dd>{status.smtp.host}:{status.smtp.port}</dd>
+                            <dt>Sender</dt><dd>{status.smtp.from}</dd>
+                            <dt>Encryption</dt><dd>{status.smtp.secure ? 'TLS' : status.smtp.requireTLS ? 'STARTTLS required' : 'STARTTLS when available'}</dd>
+                        </dl> : <p>SMTP is not configured. Invoice notification emails cannot be sent.</p>}
+                        <button type="button" className="secondary" onClick={() => navigate('smtp')}>Open Email settings</button>
                     </section>
                 </div>}
                 </>}

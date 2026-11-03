@@ -32,7 +32,7 @@ const env = { ...process.env, ANAF_MODE: 'live', ANAF_ENV: 'prod', ANAF_CIF: '99
     APP_TLS_KEY_FILE: '.local/tls/localhost-key.pem', ANAF_CLIENT_ID: 'integration-private-id',
     ANAF_CLIENT_SECRET: 'integration-private-secret', ANAF_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     ANAF_REDIRECT_URI: `${origin}/callback`, EMAIL_ENABLED: 'false',
-    DATABASE_URL: testUrl.toString(), APP_DATABASE_NAME: databaseName };
+    DATABASE_URL: testUrl.toString(), APP_DATABASE_NAME: databaseName, SMTP_HOST: '', EMAIL_FROM: '' };
 const cfg = config(env);
 const repo = new PostgresRepository(cfg);
 await repo.initialize();
@@ -140,8 +140,19 @@ try {
         await page.getByRole('button', { name: 'Add entity', exact: true }).click();
         await page.getByLabel('Company name').fill('Test company');
         await page.getByLabel('CIF / CUI').fill(env.ANAF_CIF);
-        await page.getByLabel('Notification email').fill('test@example.org');
-        await page.getByLabel('Send invoice emails').uncheck();
+        await page.getByLabel('Notification email', { exact: true }).fill('test@example.org');
+        assert.equal(await page.getByLabel('Send E-invoice notification emails', { exact: true }).isChecked(), false);
+        assert.equal(await page.getByLabel('Send E-invoice notification emails', { exact: true }).isDisabled(), true);
+        const enabledDraft = { name: 'Test company', kind: 'company', cif: env.ANAF_CIF, emailTo: 'test@example.org',
+            emailEnabled: true, pollSeconds: 60, connectionId: DEFAULT_CONNECTION_ID };
+        const sendEntity = async (path, body) => page.evaluate(async ({ path, body }) => {
+            const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            return { status: response.status, body: await response.json() };
+        }, { path, body });
+        const blockedCreation = await sendEntity('/api/companies', enabledDraft);
+        assert.equal(blockedCreation.status, 400, 'Enabling notification emails requires an SMTP transport');
+        assert.equal(blockedCreation.body.message, 'Configure SMTP in Email settings before enabling E-invoice notification emails.');
+        assert.equal((await repo.companies()).length, 0, 'Rejected notification settings must not create an entity');
         const companyCreated = page.waitForResponse(response => new URL(response.url()).pathname === '/api/companies'
             && response.request().method() === 'POST');
         await page.getByRole('button', { name: 'Add entity', exact: true }).click();
@@ -149,6 +160,9 @@ try {
         assert.equal(creation.status(), 201);
         firstCompany = await creation.json();
         assert.equal(firstCompany.connectionId, DEFAULT_CONNECTION_ID);
+        const blockedUpdate = await sendEntity(`/api/companies/${firstCompany.id}`, enabledDraft);
+        assert.equal(blockedUpdate.status, 400, 'An existing entity cannot enable notification emails without SMTP');
+        assert.equal((await repo.findCompany(firstCompany.id)).emailEnabled, false);
         await page.getByRole('button', { name: 'Email settings', exact: true }).click();
         await page.getByLabel('SMTP host', { exact: true }).fill('smtp.example.test');
         await page.getByLabel('Sender email').fill('sender@example.test');
@@ -167,6 +181,28 @@ try {
         const savedSmtp = await repo.smtpSettings();
         assert.equal(savedSmtp.password === 'synthetic-browser-password', true);
         assert.equal(savedSmtp.port, 465);
+        await page.locator('.sidebar .entity-nav').first().click();
+        const entitySettings = page.getByRole('navigation', { name: 'Entity views' }).getByRole('button', { name: 'Settings', exact: true });
+        await entitySettings.click();
+        const notifications = page.getByLabel('Send E-invoice notification emails', { exact: true });
+        assert.equal(await notifications.isEnabled(), true);
+        await notifications.check();
+        const notificationsSaved = page.waitForResponse(response => new URL(response.url()).pathname === `/api/companies/${firstCompany.id}`
+            && response.request().method() === 'POST');
+        await page.getByRole('button', { name: 'Save entity settings', exact: true }).click();
+        assert.equal((await notificationsSaved).status(), 201);
+        await page.getByText('Entity settings saved.', { exact: true }).waitFor();
+        await page.reload();
+        await entitySettings.click();
+        assert.equal(await notifications.isChecked(), true, 'The real browser checkbox remains enabled after reload');
+        const persistedStatus = await page.evaluate(async companyId => (await fetch(`/api/status?companyId=${companyId}`)).json(), firstCompany.id);
+        assert.equal(persistedStatus.company.emailEnabled, true);
+        assert.equal(persistedStatus.smtp.configured, true, 'A saved enabled notification checkbox must have an active SMTP configuration');
+        assert.equal(persistedStatus.emailEnabled, true, 'Notification delivery must be effectively enabled');
+        assert.equal((await repo.smtpSettings()).configured, true);
+        assert.equal((await repo.findCompany(firstCompany.id)).emailEnabled, true);
+        await page.locator('.smtp-summary').getByText('smtp.example.test:465', { exact: true }).waitFor();
+        assert.equal(await page.locator('.stats > div').filter({ has: page.getByText('Email notifications', { exact: true }) }).locator('strong').innerText(), 'Enabled');
         await page.getByRole('button', { name: 'Manage ANAF connections' }).first().click();
         const outgoing = page.waitForResponse(response => /\/api\/anaf\/connections\/[^/]+\/connect$/.test(new URL(response.url()).pathname));
         const firstReturn = page.waitForResponse(async response => new URL(response.url()).pathname === '/api/status'

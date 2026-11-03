@@ -252,6 +252,9 @@ tr.selected { background: var(--accent-soft); }
 .badge.failed { background: var(--error-bg); color: var(--error-text); }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
 .settings-card { padding: 25px; }
+.smtp-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px 18px; margin: 24px 0; font-size: 13px; }
+.smtp-summary dt { color: var(--muted); }
+.smtp-summary dd { margin: 0; overflow-wrap: anywhere; }
 .settings-card h2 { margin-top: 12px; }
 .invoice-dialog { background: var(--surface); width: 460px; max-width: calc(100% - 32px); max-height: calc(100% - 32px); padding: 28px; border: 1px solid var(--border); border-radius: 14px; color: var(--text); box-shadow: 0 24px 80px var(--shadow); }
 .invoice-dialog::backdrop { background: var(--backdrop); }
