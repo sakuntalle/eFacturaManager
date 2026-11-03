@@ -61,6 +61,9 @@ if errorlevel 1 goto certificates_missing
 type ".local\tls\localhost-key.pem" >nul 2>&1
 if errorlevel 1 goto certificates_missing
 
+if not defined stack_build_arg call :detect_build
+if errorlevel 1 goto failed
+
 call :compose up -d %stack_build_arg% --wait --wait-timeout 60
 if errorlevel 1 (
     echo The stack did not become healthy. Check Docker Compose service status and logs. 1>&2
@@ -83,7 +86,8 @@ goto failed
 :help
 echo Usage: scripts\start-stack.cmd [--build ^| --no-build] [--env-file file] [--no-pause]
 echo Starts the HTTPS Docker stack and waits for service health. Existing volumes are preserved.
-echo By default, reuse existing images and containers; Compose builds missing images. Use --build after source changes.
+echo By default, rebuild missing or outdated application images; reuse images when build inputs match.
+echo Use --build to force a build or --no-build to skip the source check and reuse existing images.
 echo By default, errors pause so they remain visible when double-clicking. Use --no-pause for automation.
 goto finish
 
@@ -102,3 +106,25 @@ if defined stack_env_file (
     docker compose -f compose.yaml %*
 )
 exit /b %errorlevel%
+
+:detect_build
+docker image inspect efactura-manager:development >nul 2>&1
+if errorlevel 1 (
+    echo Application image is missing; building it.
+    set "stack_build_arg=--build"
+    exit /b 0
+)
+docker run --rm --network none --mount "type=bind,source=%CD%,target=/workspace,readonly" --entrypoint node efactura-manager:development /workspace/scripts/build-inputs.mjs check /workspace
+set "stack_check_exit=%errorlevel%"
+if "%stack_check_exit%"=="0" (
+    echo Application image matches the current source; reusing it.
+    set "stack_build_arg=--no-build"
+    exit /b 0
+)
+if "%stack_check_exit%"=="10" (
+    echo Application build inputs changed or the image has no fingerprint; rebuilding.
+    set "stack_build_arg=--build"
+    exit /b 0
+)
+echo Could not check the application image. Startup stopped. 1>&2
+exit /b 1

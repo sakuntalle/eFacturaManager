@@ -11,7 +11,8 @@ while [[ $# -gt 0 ]]; do
         --help|-h)
             printf '%s\n' 'Usage: ./scripts/start-stack.sh [--build | --no-build] [--env-file <file>]'
             printf '%s\n' 'Starts the HTTPS Docker stack and waits for service health. Existing volumes are preserved.'
-            printf '%s\n' 'By default, reuse existing images and containers; Compose builds missing images. Use --build after source changes.'
+            printf '%s\n' 'By default, rebuild missing or outdated application images; reuse images when build inputs match.'
+            printf '%s\n' 'Use --build to force a build or --no-build to skip the source check and reuse existing images.'
             exit 0
             ;;
         --build)
@@ -51,6 +52,31 @@ fi
 if [[ ! -r .local/tls/localhost.pem || ! -r .local/tls/localhost-key.pem ]]; then
     printf '%s\n' 'Create readable .local/tls/localhost.pem and localhost-key.pem first. See docs/local-https.md.' >&2
     exit 1
+fi
+
+if [[ "$build" == auto ]]; then
+    if image_id="$(docker image inspect efactura-manager:development --format '{{.Id}}' 2>/dev/null)"; then
+        check_status=0
+        docker run --rm --network none --mount "type=bind,source=$project_root,target=/workspace,readonly" \
+            --entrypoint node "$image_id" /workspace/scripts/build-inputs.mjs check /workspace || check_status=$?
+        case "$check_status" in
+            0)
+                printf '%s\n' 'Application image matches the current source; reusing it.'
+                build=false
+                ;;
+            10)
+                printf '%s\n' 'Application build inputs changed or the image has no fingerprint; rebuilding.'
+                build=true
+                ;;
+            *)
+                printf '%s\n' 'Could not check the application image. Startup stopped.' >&2
+                exit "$check_status"
+                ;;
+        esac
+    else
+        printf '%s\n' 'Application image is missing; building it.'
+        build=true
+    fi
 fi
 
 start_args=(up -d)

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-async function runHelper(args: string[], exitCode = '0') {
+async function runHelper(args: string[], exitCode = '0', imagePresent = true, checkCode = '0') {
     const root = await mkdtemp(join(tmpdir(), 'efactura startup '));
     try {
         await Promise.all(['scripts', 'bin', '.local/tls'].map(path => mkdir(join(root, path), { recursive: true })));
@@ -19,6 +19,7 @@ async function runHelper(args: string[], exitCode = '0') {
             cwd: fileURLToPath(new URL('../', import.meta.url)), encoding: 'utf8',
             env: { ...process.env, PATH: `${join(root, 'bin')}${delimiter}${process.env.PATH}`,
                 START_STACK_TEST_LOG: log, START_STACK_TEST_UP_CODE: exitCode,
+                START_STACK_TEST_IMAGE_PRESENT: String(imagePresent), START_STACK_TEST_CHECK_CODE: checkCode,
                 START_STACK_TEST_NODE: process.execPath,
                 START_STACK_TEST_STUB: fileURLToPath(new URL('./helpers/start-stack-docker.mjs', import.meta.url)) },
         });
@@ -29,25 +30,53 @@ async function runHelper(args: string[], exitCode = '0') {
     }
 }
 
-test('normal stack startup leaves missing-image builds to Compose without forcing rebuilds or recreation',
+test('normal stack startup reuses a matching image without building or forcing recreation',
     { skip: process.platform === 'win32' }, async () => {
         const result = await runHelper([]);
         assert.equal(result.status, 0);
         const up = result.calls.find(args => args.includes('up'))!;
         assert.ok(up);
-        for (const flag of ['--build', '--no-build', '--force-recreate', '--no-recreate']) assert.equal(up.includes(flag), false);
+        assert.ok(up.includes('--no-build'));
+        for (const flag of ['--build', '--force-recreate', '--no-recreate']) assert.equal(up.includes(flag), false);
+        const check = result.calls.find(args => args[0] === 'run')!;
+        assert.ok(check.includes('/workspace/scripts/build-inputs.mjs'));
+        assert.ok(check.includes('check'));
+        assert.equal(check[check.indexOf('--network') + 1], 'none');
+        assert.match(check[check.indexOf('--mount') + 1], /target=\/workspace,readonly$/);
         assert.ok(up.includes('--wait'));
         assert.match(result.stdout, /Website ready: https:\/\/localhost:8765/);
         assert.equal(`${result.stdout}${result.stderr}`.includes('synthetic-private-configuration'), false);
     });
 
-test('stack startup rebuilds only on request and preserves an environment filename containing spaces',
+test('explicit rebuild skips detection and preserves an environment filename containing spaces',
     { skip: process.platform === 'win32' }, async () => {
         const result = await runHelper(['--build', '--env-file', 'test settings.env']);
         assert.equal(result.status, 0, `${result.stderr}\n${JSON.stringify(result.calls)}`);
         const up = result.calls.find(args => args.includes('up'))!;
         assert.ok(up.includes('--build'));
+        assert.equal(result.calls.some(args => args[0] === 'run' || args[0] === 'image'), false);
         assert.equal(up[up.indexOf('--env-file') + 1], 'test settings.env');
+    });
+
+test('normal startup builds missing images and rebuilds changed sources or older images without a fingerprint',
+    { skip: process.platform === 'win32' }, async () => {
+        for (const imagePresent of [false, true]) {
+            const result = await runHelper([], '0', imagePresent, '10');
+            assert.equal(result.status, 0);
+            const up = result.calls.find(args => args.includes('up'))!;
+            assert.ok(up.includes('--build'));
+            assert.equal(up.includes('--no-build'), false);
+            assert.equal(result.calls.some(args => args[0] === 'run'), imagePresent);
+            assert.match(result.stdout, /building/);
+        }
+    });
+
+test('a failed source check stops startup instead of running an unverified image',
+    { skip: process.platform === 'win32' }, async () => {
+        const result = await runHelper([], '0', true, '1');
+        assert.equal(result.status, 1);
+        assert.equal(result.calls.some(args => args.includes('up') || args.includes('exec')), false);
+        assert.match(result.stderr, /Could not check the application image/);
     });
 
 test('explicit no-build disables even automatic builds and a startup failure is propagated',
@@ -55,6 +84,7 @@ test('explicit no-build disables even automatic builds and a startup failure is 
         const result = await runHelper(['--no-build'], '7');
         assert.equal(result.status, 7);
         assert.ok(result.calls.find(args => args.includes('up'))!.includes('--no-build'));
+        assert.equal(result.calls.some(args => args[0] === 'run' || args[0] === 'image'), false);
         assert.equal(result.calls.some(args => args.includes('exec')), false);
         assert.doesNotMatch(result.stdout, /Website ready/);
     });

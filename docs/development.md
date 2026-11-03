@@ -72,7 +72,7 @@ The browser suite uses controlled API responses and does not need the real admin
 
 Before the first Docker launch, create and trust `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem` using the [local HTTPS setup](local-https.md). If your `.env` previously used HTTP, update `APP_PUBLIC_URL` and `APP_TLS_PORT` using that guide's migration instructions.
 
-Start Docker Desktop or the Docker daemon, then run the command for your platform from the project folder. Both helpers use your `.env`, reuse existing images, start the services, wait for health, and print the website address. On a fresh setup, Compose builds missing application images and pulls missing dependency images. Unchanged running containers are kept; stopped containers are started. Compose may recreate a container if its configuration or image has changed. Existing volumes are preserved. The helpers require neither Node.js nor npm on the host. They start the stack; create the administrator separately on first installation as described below.
+Start Docker Desktop or the Docker daemon, then run the command for your platform from the project folder. Both helpers use your `.env`, start the services, wait for health, and print the website address. They compare the current Docker build inputs with a fingerprint stored inside the application image. Changed source, assets, dependencies, build configuration or branch contents trigger a rebuild; unchanged inputs reuse the image. Missing images and older images without a fingerprint are built automatically. The comparison runs in a disposable container with no network access and a read-only source mount. It excludes `.env`, local data and files outside the Docker build inputs. Unchanged running containers are kept; stopped containers are started. Compose may recreate a container if its configuration or image has changed. Existing volumes are preserved. The helpers require neither Node.js nor npm on the host. They start the stack; create the administrator separately on first installation as described below.
 
 On macOS or Linux:
 
@@ -94,7 +94,7 @@ scripts\start-stack.cmd
 
 Windows users can also double-click `scripts\start-stack.cmd` in File Explorer. If startup fails, the window waits for a keypress so the error remains visible. Add `--no-pause` when using the Windows helper in automation; failure still returns a nonzero exit code. The Windows helper does not require Bash, WSL, or a PowerShell execution-policy change.
 
-For normal starts, no build flag is needed. After changing application source, add `--build` to rebuild and deploy it. Both helpers accept `--no-build` to prohibit building even when an image is missing, and `--env-file <file>` to select another configured environment file:
+For normal starts, including after source changes or branch switches, no build flag is needed. Use `--build` to force a build. Both helpers accept `--no-build` to skip the comparison and prohibit building even when an image is missing, and `--env-file <file>` to select another configured environment file:
 
 ```sh
 ./scripts/start-stack.sh --build --env-file .env
@@ -106,7 +106,7 @@ For normal starts, no build flag is needed. After changing application source, a
 
 Use `--help` to display options. You can invoke either helper by its absolute path from any working directory; environment-file paths are relative to the project root.
 
-After pulling source updates, use `--build` for the first start. A normal start reuses the existing application image, so it cannot apply a startup fix from newer source. A connection without a linked entity is valid during onboarding and must not prevent the web app or worker from starting.
+After pulling source updates, a normal start detects changed build inputs and rebuilds the application as needed. A connection without a linked entity is valid during onboarding and must not prevent the web app or worker from starting.
 
 To exercise the image built from the current checkout:
 
