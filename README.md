@@ -1,7 +1,7 @@
 # eFactura Manager
 
 [![CI](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/sakuntalle/eFacturaManager/actions/workflows/ci.yml)
-[![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3_or_later-blue.svg)](LICENSE)
+[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 
 A self-hosted TypeScript application for collecting and viewing Romanian e-Factura invoices. It connects to ANAF (Romania’s National Agency for Fiscal Administration), stores original invoices and generated PDFs in PostgreSQL, and sends email notifications through SMTP configured in the app.
 
@@ -235,4 +235,4 @@ Contributions are welcome; read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 
 Releases are published manually by the repository owner. The maintainer workflow and required GitHub branch rules are documented in [docs/releasing.md](docs/releasing.md).
 
-Copyright © 2026 Mihnea Magheru. This project is free software licensed under [GNU GPL version 3 or later](LICENSE). It is provided without warranty; review the license and deployment guidance before using it with production data.
+Copyright © 2026 Mihnea Magheru. This project is free software licensed under the [BSD 3-Clause License](LICENSE). It is provided without warranty; review the license and deployment guidance before using it with production data.

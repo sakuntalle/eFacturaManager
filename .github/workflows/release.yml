@@ -83,7 +83,7 @@ jobs:
                   labels: |
                       org.opencontainers.image.title=eFactura Manager
                       org.opencontainers.image.description=Self-hosted Romanian e-Factura invoice manager
-                      org.opencontainers.image.licenses=GPL-3.0-or-later
+                      org.opencontainers.image.licenses=BSD-3-Clause
                       org.opencontainers.image.source=https://github.com/sakuntalle/eFacturaManager
             - uses: docker/build-push-action@v7
               with:
