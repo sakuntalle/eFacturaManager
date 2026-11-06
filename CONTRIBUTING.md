@@ -40,4 +40,4 @@ All changes to `main` must go through a pull request. Describe what changed, why
 
 The repository owner, `@sakuntalle`, is the Code Owner for the entire project. A pull request must pass CI and receive that Code Owner's approval before it can be merged. Contributors must not merge their own pull requests or push directly to `main`.
 
-By submitting a contribution, you agree that it is licensed under the project's [GPL-3.0-or-later license](LICENSE) and that you have the right to submit it under those terms.
+By submitting a contribution, you agree that it is licensed under the project's [BSD 3-Clause License](LICENSE) and that you have the right to submit it under those terms.
