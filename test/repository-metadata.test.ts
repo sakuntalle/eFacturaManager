@@ -13,7 +13,8 @@ test('live ANAF documentation makes HTTPS Compose the default and preserves exac
     const liveConnection = readFileSync(new URL('../docs/live-connection.md', import.meta.url), 'utf8');
     const sourceCommand = 'docker compose --env-file .env -f compose.yaml up -d --build';
 
-    assert.ok(readme.includes(sourceCommand));
+    assert.ok(readme.includes('docker compose --env-file .env -f compose.release.yaml up -d --wait'));
+    assert.ok(readme.includes('docs/development.md#docker-development-build'));
     assert.ok(development.includes(sourceCommand));
     assert.ok(liveConnection.includes(sourceCommand));
     for (const documentation of [readme, development, liveConnection]) {
@@ -22,11 +23,13 @@ test('live ANAF documentation makes HTTPS Compose the default and preserves exac
     }
 });
 
-test('fresh Docker setup documents certificate creation before the first source launch', () => {
+test('fresh release and source Docker setup document certificate creation before launch', () => {
     for (const path of ['../README.md', '../docs/development.md']) {
         const content = readFileSync(new URL(path, import.meta.url), 'utf8');
-        const section = content.slice(content.indexOf(path.includes('README')
-            ? '## Build the current source with Docker' : '## Docker development build'));
+        const start = content.indexOf(path.includes('README')
+            ? '## Install a release (non-developers)' : '## Docker development build');
+        assert.ok(start >= 0, 'The appropriate installation section must exist');
+        const section = content.slice(start);
         const prerequisite = section.indexOf('local-https.md');
         const launch = section.indexOf('docker compose');
         assert.ok(prerequisite >= 0 && prerequisite < launch, 'Certificate setup must precede Docker startup');
@@ -80,6 +83,13 @@ test('README documents the supported release platforms and non-developer install
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 
     assert.match(readme, /## Install a release \(non-developers\)/);
+    const prerequisites = readme.indexOf('## Before you start');
+    const installation = readme.indexOf('## Install a release');
+    const usage = readme.indexOf('## Use the app');
+    const development = readme.indexOf('## Development');
+    assert.ok(prerequisites >= 0 && prerequisites < installation);
+    assert.ok(usage > installation && development > usage);
+    assert.doesNotMatch(readme, /Default database credentials and session secret are local development values/);
     assert.ok(readme.includes('`linux/amd64`'));
     assert.ok(readme.includes('`linux/arm64`'));
     assert.ok(readme.includes('Native Windows containers'));

@@ -66,13 +66,24 @@ npx playwright install chromium
 PLAYWRIGHT_CHANNEL=chromium npm run test:browser
 ```
 
-The browser suite uses controlled API responses and does not need the real administrator password. Integration scripts and their prerequisites are described in the main [README](../README.md#run-during-development).
+The browser suite uses controlled API responses and does not need the real administrator password. See [Integration checks](#integration-checks) for database and HTTPS tests.
 
 ## Docker development build
 
+A Docker source installation needs Git, Docker and locally trusted HTTPS certificates. Node.js and npm on the host are only needed for native development and local test commands.
+
+Clone the repository if needed and create `.env` from `.env.example` (`Copy-Item .env.example .env` in Windows PowerShell). Set a random `POSTGRES_PASSWORD`, `APP_PUBLIC_URL=https://localhost:8765` and `APP_TLS_PORT=8765`. See [the live connection guide](live-connection.md) for the ANAF application registration.
+
 Before the first Docker launch, create and trust `.local/tls/localhost.pem` and `.local/tls/localhost-key.pem` using the [local HTTPS setup](local-https.md). If your `.env` previously used HTTP, update `APP_PUBLIC_URL` and `APP_TLS_PORT` using that guide's migration instructions.
 
-Start Docker Desktop or the Docker daemon, then run the command for your platform from the project folder. Both helpers use your `.env`, start the services, wait for health, and print the website address. They compare the current Docker build inputs with a fingerprint stored inside the application image. Changed source, assets, dependencies, build configuration or branch contents trigger a rebuild; unchanged inputs reuse the image. Missing images and older images without a fingerprint are built automatically. The comparison runs in a disposable container with no network access and a read-only source mount. It excludes `.env`, local data and files outside the Docker build inputs. Unchanged running containers are kept; stopped containers are started. Compose may recreate a container if its configuration or image has changed. Existing volumes are preserved. The helpers require neither Node.js nor npm on the host. They start the stack; create the administrator separately on first installation as described below.
+Create `.local/admin` (`mkdir -p .local/admin` on macOS/Linux or `New-Item -ItemType Directory -Force .local/admin` in Windows PowerShell). Start Docker Desktop or the Docker daemon, then initialize the database and administrator:
+
+```sh
+docker compose --env-file .env up -d database
+docker compose --env-file .env --profile tools run --rm admin-bootstrap
+```
+
+Run the command for your platform from the project folder. Both helpers use your `.env`, start the services, wait for health, and print the website address. They compare the current Docker build inputs with a fingerprint stored inside the application image. Changed source, assets, dependencies, build configuration or branch contents trigger a rebuild; unchanged inputs reuse the image. Missing images and older images without a fingerprint are built automatically. The comparison runs in a disposable container with no network access and a read-only source mount. It excludes `.env`, local data and files outside the Docker build inputs. Unchanged running containers are kept; stopped containers are started. Compose may recreate a container if its configuration or image has changed. Existing volumes are preserved. The helpers require neither Node.js nor npm on the host. They start the stack; create the administrator separately on first installation as described below.
 
 On macOS or Linux:
 
@@ -127,3 +138,48 @@ docker compose --env-file .env -f compose.yaml up -d --build
 Open <https://localhost:8765>. See the [live connection guide](live-connection.md) for certificate creation and the complete setup. The rebuild preserves named volumes; never add `-v` unless the database and application secrets should be deleted.
 
 Native HTTP development supports UI work and stored documents; use the HTTPS Docker setup for qualified-certificate authorization. Session and token-encryption keys are created automatically in APP_SECRETS_DIR and must be retained across restarts.
+
+## Integration checks
+
+With local PostgreSQL configured through `DATABASE_URL` in `.env`, run:
+
+```sh
+npm run test:admin
+npm run test:reset
+npm run test:entities
+npm run test:files
+npm run test:smtp
+npm run test:connection
+```
+
+These checks use temporary databases and synthetic data. The connection test also requires the local mkcert certificates and Chrome. It builds the app and exercises real browser interactions against a local HTTPS authorization provider; ANAF requests are intercepted and do not contact the real service.
+
+After building, `node --env-file=.env scripts/invoice-totals-integration.mjs` checks invoice amount migration rollback, concurrency and idempotency. See [Operations](operations.md#upgrading-older-installations) for the migration behavior.
+
+## Switch the active database
+
+
+The Docker web app and worker use the same `APP_DATABASE_NAME` from `.env`; the default is `efactura`. To create a separate, persistent workspace for first-login and live ANAF testing without changing the registered `https://localhost:8765/callback` URL:
+
+```sh
+npm run db:create -- efactura_onboarding
+```
+
+The command creates and initializes the named database on the local PostgreSQL server and writes its one-time administrator password to `.local/admin/efactura_onboarding/README.md`. It refuses to overwrite an existing database. Change `APP_DATABASE_NAME=efactura_onboarding` in `.env`, then apply the selection to both services:
+
+```sh
+docker compose --env-file .env -f compose.yaml up -d --no-deps --force-recreate web worker
+```
+
+Open the normal <https://localhost:8765> site and sign in with the new database's administrator password. The frontend, URL, ANAF callback and PostgreSQL volume stay the same; accounts, entities, invoices, sessions and saved ANAF connections belong to the selected database. To return to the original workspace, set `APP_DATABASE_NAME=efactura` and run the same Compose command. Neither switch deletes a database. For native development, `APP_DATABASE_NAME` selects the database in `DATABASE_URL` as well. Keep only one web/worker pair active for a selected database.
+
+An alternative isolated first-login site can run from the current build on port 9878:
+
+```sh
+npm run build
+npm run first-login:start
+```
+
+Open <https://localhost:9878>, sign in as `admin`, and read the generated temporary password in `.local/first-login-demo/admin/README.md`. This test instance starts with no managed entities or ANAF connections. It uses its own temporary PostgreSQL database, live ANAF mode and disabled email delivery. It does not start a worker, so it will not collect invoices automatically. To complete a real ANAF authorization, add `https://localhost:9878/callback` as another callback URL for your ANAF OAuth application; the normal app's `https://localhost:8765/callback` registration remains in place. When finished, run `npm run first-login:stop` to stop the test site and remove only its temporary database. Run `npm run first-login:start` again to repeat the flow with a fresh account.
+
+See [Architecture](architecture.md) for component boundaries and delivery semantics.
